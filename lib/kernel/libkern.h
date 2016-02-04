@@ -46,7 +46,7 @@ vm_size_t write_kernel(vm_address_t addr, unsigned char* data, vm_size_t size);
  *
  * Returns the address of the first occurance of bytes if found, otherwise 0.
  */
-vm_address_t find_bytes(vm_address_t start, vm_address_t end, unsigned char* bytes, size_t length);
+vm_address_t find_bytes_kern(vm_address_t start, vm_address_t end, unsigned char* bytes, size_t length);
 
 
 #endif

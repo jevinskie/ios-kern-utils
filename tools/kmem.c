@@ -80,7 +80,11 @@ int main(int argc, char** argv)
     }
 
     if (!dump_raw)
-        printf("reading %i bytes from 0x" ADDR "\n", size, addr);
+#ifdef __aarch64__
+        printf("reading %lu bytes from 0x" ADDR "\n", size, addr);
+#else
+        printf("reading %u bytes from 0x" ADDR "\n", size, addr);
+#endif
     unsigned char* buf = malloc(size);
     read_kernel(addr, size, buf);
 

@@ -25,7 +25,7 @@ int main()
 
     ret = task_for_pid(mach_task_self(), 0, &kernel_task);
     if (ret != KERN_SUCCESS) {
-        printf("[!] failed to access the kernel task");
+        printf("[!] failed to access the kernel task\n");
         return -1;
     }
 

@@ -25,14 +25,19 @@ int main(int argc, char** argv)
     size_t size = 0x50;
     memset(uuid, 0, size);
     int ret = sysctlbyname("kern.uuid", uuid, &size, NULL, 0);
+    if(ret != 0)
+    {
+        printf("[!] failed to create uuid, sysctlbyname returned %i\n", ret);
+        return -1;
+    }
     printf("[*] uuid: %s\n", uuid);
 
     if((kbase = get_kernel_base()) == 0) {
-        printf("[!] failed to get the kernel base address");
+        printf("[!] failed to get the kernel base address\n");
         return -1;
     }
 
-    vm_address_t uuid_addr = find_bytes(kbase, kbase + 0x1000000, (unsigned char*)uuid, strlen(uuid));
+    vm_address_t uuid_addr = find_bytes_kern(kbase, kbase + 0x1000000, (unsigned char*)uuid, strlen(uuid));
     if (uuid_addr == 0) {
         printf("[!] failed to find the uuid in kernel memory\n");
         return -1;

@@ -73,7 +73,7 @@ vm_size_t write_kernel(vm_address_t addr, unsigned char* data, vm_size_t size)
     return bytes_written;
 }
 
-vm_address_t find_bytes(vm_address_t start, vm_address_t end, unsigned char* bytes, size_t length)
+vm_address_t find_bytes_kern(vm_address_t start, vm_address_t end, unsigned char* bytes, size_t length)
 {
     vm_address_t ret = 0;
     unsigned char* buf = malloc(end - start);
