@@ -21,7 +21,7 @@ kmem   - Tool to dump kernel memory to the console
 You may also specify the following environment variables:
 
 Name | Function | Default Value
-:-: | :- | :-
+:-: | :-- | :--
 IGCC | iOS compiler command | `xcrun -sdk iphoneos gcc`
 IGCC_TARGET | target flags (can be arbitrary though) | `-arch arm64 -arch armv7`
 IGCC_FLAGS | installation flags (you probably don't wanna touch those) | `-F/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk/System/Library/Frameworks -I/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk/usr/include -L/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk/usr/lib -L/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk/usr/lib/system`
