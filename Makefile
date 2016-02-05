@@ -6,7 +6,8 @@ ifndef IGCC_FLAGS
 IGCC_FLAGS = -F/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk/System/Library/Frameworks -I/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk/usr/include -L/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk/usr/lib -L/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk/usr/lib/system
 endif
 ifndef IGCC_TARGET
-IGCC_TARGET = -arch arm64 -arch armv7
+#IGCC_TARGET = -arch armv7 -arch arm64
+IGCC_TARGET = -arch arm64
 endif
 ifndef SIGN
 SIGN = codesign
