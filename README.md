@@ -3,7 +3,7 @@
 ### Prerequisites
 
 * Jailbroken Device
-* `task_for_pid0` kernel patch (probably the case if jailbroken)
+* `task_for_pid0` kernel patch (probably the case if jailbroken on iOS 8 or earlier)
 * If you don't have XCode:
   * GNU make
   * C compiler for iOS
