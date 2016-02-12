@@ -1,3 +1,4 @@
+ALL = kdump kmap kmem kpatch
 CFLAGS = -Wall -Wno-unused-local-typedef -Ilib/kernel -Ilib/binary lib/kernel/*.c lib/binary/*.c lib/binary/*/*.c
 
 ifndef IGCC
@@ -47,7 +48,7 @@ ifndef SIGN_FLAGS
 	endif
 endif
 
-all: kdump kmap kmem kpatch
+all: $(ALL)
 
 kdump: build
 	$(IGCC) $(IGCC_FLAGS) $(IGCC_TARGET) -o build/kdump $(CFLAGS) tools/kdump.c
@@ -70,3 +71,6 @@ build:
 
 clean:
 	rm -rf build
+
+package: all
+	tar -cJf build/ios-kern-utils.tar.xz -C build $(ALL)
