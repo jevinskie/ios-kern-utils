@@ -12,18 +12,6 @@ ifndef IGCC
 		IGCC = ios-clang
 	endif
 endif
-ifndef IGCC_SDKROOT
-	ifeq ($(shell uname -s),Darwin)
-		ifneq ($(HOSTTYPE),arm)
-			IGCC_SDKROOT = /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk
-		else
-			IGCC_SDKROOT = /var/sdk/sdk
-		endif
-	else
-		IGCC_SDKROOT = /opt/ios-toolchain/share/iPhoneOS.sdk
-	endif
-endif
-IGCC_FLAGS += -F$(IGCC_SDKROOT)/System/Library/Frameworks -I$(IGCC_SDKROOT)/usr/include -L$(IGCC_SDKROOT)/usr/lib -L$(IGCC_SDKROOT)/usr/lib/system
 ifndef IGCC_TARGET
 	IGCC_TARGET = -arch armv7 -arch arm64
 endif

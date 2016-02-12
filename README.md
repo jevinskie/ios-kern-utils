@@ -1,5 +1,10 @@
 # iOS Kernel Utilities
 
+### Download
+
+Just want the binaries?  
+Head over to [Releases](https://github.com/Siguza/ios-kern-utils/releases). :)
+
 ### Prerequisites
 
 * Jailbroken Device
@@ -31,7 +36,6 @@ Name | Function | Default value
 `IGCC` | iOS compiler command | **OS X**: `xcrun -sdk iphoneos gcc`<br>**Linux**: `ios-clang`<br>**iOS**: `clang`
 `IGCC_TARGET` | target flags | `-arch armv7 -arch arm64`
 `IGCC_FLAGS` | compiler flags | *none*
-`IGCC_SDKROOT` | SDK root path | **OS X**: `/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk`<br>**Linux**: `/opt/ios-toolchain/share/iPhoneOS.sdk`<br>**iOS**: `/var/sdk/sdk`
 `SIGN` | code signing utility | **OS X**: `codesign`<br>**Linux**: `ldid`<br>**iOS**: `ldid`
 `SIGN_FLAGS` | code signing flags | if `SIGN == codesign`: `-s - --entitlements misc/ent.xml`<br>if `SIGN == ldid`: `-Smisc/ent.xml`<br>otherwise: *none*
 
