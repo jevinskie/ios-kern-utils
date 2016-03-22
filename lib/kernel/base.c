@@ -29,7 +29,12 @@ kern_return_t get_kernel_task(task_t *task)
         ret = task_for_pid(mach_task_self(), 0, &kernel_task);
         if(ret != KERN_SUCCESS)
         {
-            return ret;
+            // Try Pangu's special port
+            ret = host_get_special_port(mach_host_self(), HOST_LOCAL_NODE, 4, &kernel_task);
+            if(ret != KERN_SUCCESS)
+            {
+                return ret;
+            }
         }
         initialized = 1;
     }
