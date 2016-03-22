@@ -2,6 +2,7 @@
  * mem.c - Kernel memory related functions.
  *
  * Copyright (c) 2014 Samuel Groß
+ * Copyright (c) 2016 Siguza
  */
 
 #include <stdlib.h>
@@ -22,7 +23,7 @@ vm_size_t read_kernel(vm_address_t addr, vm_size_t size, unsigned char* buf)
     vm_size_t remainder = size;
     vm_size_t bytes_read = 0;
 
-    ret = task_for_pid(mach_task_self(), 0, &kernel_task);
+    ret = get_kernel_task(&kernel_task);
     if (ret != KERN_SUCCESS)
         return -1;
 
@@ -52,7 +53,7 @@ vm_size_t write_kernel(vm_address_t addr, unsigned char* data, vm_size_t size)
     vm_size_t remainder = size;
     vm_size_t bytes_written = 0;
 
-    ret = task_for_pid(mach_task_self(), 0, &kernel_task);
+    ret = get_kernel_task(&kernel_task);
     if (ret != KERN_SUCCESS)
         return -1;
 

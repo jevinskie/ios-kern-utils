@@ -2,6 +2,7 @@
  * kmap.c - Display a listing of the kernel memory mappings.
  *
  * Copyright (c) 2014 Samuel Groß
+ * Copyright (c) 2016 Siguza
  */
 
 #include <stdio.h>
@@ -23,7 +24,7 @@ int main()
     kern_return_t ret;
     task_t kernel_task;
 
-    ret = task_for_pid(mach_task_self(), 0, &kernel_task);
+    ret = get_kernel_task(&kernel_task);
     if (ret != KERN_SUCCESS) {
         printf("[!] failed to access the kernel task\n");
         return -1;

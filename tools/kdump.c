@@ -2,6 +2,7 @@
  * kdump.c - Kernel dumper code
  *
  * Copyright (c) 2014 Samuel Groß
+ * Copyright (c) 2016 Siguza
  */
 
 #include <stdio.h>
@@ -19,6 +20,11 @@
 
 #define KERNEL_SIZE 0x1800000
 #define HEADER_SIZE 0x1000
+#if __LP64__
+#define MACH_HEADER_MAGIC MH_MAGIC_64
+#else
+#define MACH_HEADER_MAGIC MH_MAGIC
+#endif
 
 #define max(a, b) (a) > (b) ? (a) : (b)
 
@@ -44,7 +50,7 @@ int main()
 
     memset(header, 0, HEADER_SIZE);
 
-    ret = task_for_pid(mach_task_self(), 0, &kernel_task);
+    ret = get_kernel_task(&kernel_task);
     if (ret != KERN_SUCCESS) {
         printf("[!] failed to get access to the kernel task\n");
         return -1;
@@ -61,6 +67,11 @@ int main()
 
     printf("[*] reading kernel header...\n");
     read_kernel(kbase, HEADER_SIZE, buf);
+    if (orig_hdr->magic != MACH_HEADER_MAGIC)
+    {
+        printf("[!] header has wrong magic, expected: 0x%08x, found: 0x%08x\n", MACH_HEADER_MAGIC, orig_hdr->magic);
+        return -1;
+    }
     memcpy(hdr, orig_hdr, sizeof(*hdr));
     hdr->ncmds = 0;
     hdr->sizeofcmds = 0;
@@ -80,11 +91,11 @@ int main()
         switch(cmd->cmd) {
         case LC_SEGMENT:
         case LC_SEGMENT_64: {
-            #if __LP64__
+#if __LP64__
             seg = (struct segment_command_64*)cmd;
-            #else
+#else
             seg = (struct segment_command*)cmd;
-            #endif
+#endif
             printf("[+] found segment %s\n", seg->segname);
             read_kernel(seg->vmaddr, seg->filesize, binary + seg->fileoff);
             filesize = max(filesize, seg->fileoff + seg->filesize);

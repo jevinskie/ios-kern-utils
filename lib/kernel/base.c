@@ -2,6 +2,7 @@
  * base.c - Get the kernel base address.
  *
  * Copyright (c) 2014 Samuel Groß
+ * Copyright (c) 2016 Siguza
  */
 
 #include <stdio.h>
@@ -18,6 +19,23 @@
 
 #include "libkern.h"
 
+kern_return_t get_kernel_task(task_t *task)
+{
+    static task_t kernel_task;
+    static char initialized = 0;
+    kern_return_t ret;
+    if(!initialized)
+    {
+        ret = task_for_pid(mach_task_self(), 0, &kernel_task);
+        if(ret != KERN_SUCCESS)
+        {
+            return ret;
+        }
+        initialized = 1;
+    }
+    *task = kernel_task;
+    return KERN_SUCCESS;
+}
 
 vm_address_t get_kernel_base()
 {
@@ -29,7 +47,7 @@ vm_address_t get_kernel_base()
     unsigned int depth = 0;
     vm_address_t addr = 0x81200000;         // lowest possible kernel base address
 
-    ret = task_for_pid(mach_task_self(), 0, &kernel_task);
+    ret = get_kernel_task(&kernel_task);
     if (ret != KERN_SUCCESS)
         return 0;
 
