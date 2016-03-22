@@ -1,4 +1,4 @@
-ALL = kdump kmap kmem kpatch
+ALL = kdump khead kmap kmem kpatch
 CFLAGS = -Wall -Wno-unused-local-typedef -Ilib/kernel -Ilib/binary lib/kernel/*.c lib/binary/*.c lib/binary/*/*.c
 
 ifndef IGCC
@@ -41,6 +41,10 @@ all: $(ALL)
 kdump: build
 	$(IGCC) $(IGCC_FLAGS) $(IGCC_TARGET) -o build/kdump $(CFLAGS) tools/kdump.c
 	$(SIGN) $(SIGN_FLAGS) build/kdump
+
+khead: build
+	$(IGCC) $(IGCC_FLAGS) $(IGCC_TARGET) -o build/khead $(CFLAGS) tools/khead.c
+	$(SIGN) $(SIGN_FLAGS) build/khead
 
 kmap: build
 	$(IGCC) $(IGCC_FLAGS) $(IGCC_TARGET) -o build/kmap $(CFLAGS) tools/kmap.c
