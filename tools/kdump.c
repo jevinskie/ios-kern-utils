@@ -18,7 +18,6 @@
 #include <libkern.h>
 #include <mach-o/binary.h>
 
-#define KERNEL_SIZE 0x1800000
 #define HEADER_SIZE 0x1000
 #if __LP64__
 #define MACH_HEADER_MAGIC MH_MAGIC_64
@@ -51,23 +50,22 @@ int main()
     memset(header, 0, HEADER_SIZE);
 
     ret = get_kernel_task(&kernel_task);
-    if (ret != KERN_SUCCESS) {
+    if(ret != KERN_SUCCESS)
+    {
         printf("[!] failed to get access to the kernel task\n");
         return -1;
     }
 
-    if ((kbase = get_kernel_base()) == 0) {
+    if((kbase = get_kernel_base()) == 0)
+    {
         printf("[!] could not find kernel base address\n");
         return -1;
     }
     printf("[*] found kernel base at address 0x" ADDR "\n", kbase);
 
-    f = fopen("kernel.bin", "wb");
-    binary = calloc(1, KERNEL_SIZE);            // too large for the stack
-
     printf("[*] reading kernel header...\n");
     read_kernel(kbase, HEADER_SIZE, buf);
-    if (orig_hdr->magic != MACH_HEADER_MAGIC)
+    if(orig_hdr->magic != MACH_HEADER_MAGIC)
     {
         printf("[!] header has wrong magic, expected: 0x%08x, found: 0x%08x\n", MACH_HEADER_MAGIC, orig_hdr->magic);
         return -1;
@@ -86,29 +84,51 @@ int main()
      * The load commands for these parts will be removed from the final
      * executable.
      */
-    printf("[*] restoring segments...\n");
-    CMD_ITERATE(orig_hdr, cmd) {
-        switch(cmd->cmd) {
-        case LC_SEGMENT:
-        case LC_SEGMENT_64: {
+
+    // first loop through all segments to determine file size
+    CMD_ITERATE(orig_hdr, cmd)
+    {
+        switch(cmd->cmd)
+        {
+            case LC_SEGMENT:
+            case LC_SEGMENT_64:
+            {
 #if __LP64__
-            seg = (struct segment_command_64*)cmd;
+                seg = (struct segment_command_64*)cmd;
 #else
-            seg = (struct segment_command*)cmd;
+                seg = (struct segment_command*)cmd;
 #endif
-            printf("[+] found segment %s\n", seg->segname);
-            read_kernel(seg->vmaddr, seg->filesize, binary + seg->fileoff);
-            filesize = max(filesize, seg->fileoff + seg->filesize);
+                filesize = max(filesize, seg->fileoff + seg->filesize);
+                break;
+            }
         }
-        case LC_UUID:
-        case LC_UNIXTHREAD:
-        case 0x25:
-        case 0x2a:
-        case 0x26:
-            memcpy(header + sizeof(*hdr) + hdr->sizeofcmds, cmd, cmd->cmdsize);
-            hdr->sizeofcmds += cmd->cmdsize;
-            hdr->ncmds++;
-            break;
+    }
+    binary = calloc(1, filesize);
+
+    printf("[*] restoring segments...\n");
+    CMD_ITERATE(orig_hdr, cmd)
+    {
+        switch(cmd->cmd)
+        {
+            case LC_SEGMENT:
+            case LC_SEGMENT_64: {
+#if __LP64__
+                seg = (struct segment_command_64*)cmd;
+#else
+                seg = (struct segment_command*)cmd;
+#endif
+                printf("[+] found segment %s\n", seg->segname);
+                read_kernel(seg->vmaddr, seg->filesize, binary + seg->fileoff);
+            }
+            case LC_UUID:
+            case LC_UNIXTHREAD:
+            case 0x25:
+            case 0x2a:
+            case 0x26:
+                memcpy(header + sizeof(*hdr) + hdr->sizeofcmds, cmd, cmd->cmdsize);
+                hdr->sizeofcmds += cmd->cmdsize;
+                hdr->ncmds++;
+                break;
         }
     }
 
@@ -116,6 +136,7 @@ int main()
     memcpy(binary, header, sizeof(*hdr) + orig_hdr->sizeofcmds);
 
     // ... and write the final binary to file
+    f = fopen("kernel.bin", "wb");
     fwrite(binary, filesize, 1, f);
 
     printf("[*] done, wrote 0x%lx bytes\n", filesize);
