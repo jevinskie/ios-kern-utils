@@ -50,22 +50,24 @@ vm_address_t get_kernel_base()
     vm_size_t size;
     mach_msg_type_number_t info_count = VM_REGION_SUBMAP_INFO_COUNT_64;
     unsigned int depth = 0;
-    vm_address_t addr = 0x81200000;         // lowest possible kernel base address
+    vm_address_t addr = 0;
 
     ret = get_kernel_task(&kernel_task);
-    if (ret != KERN_SUCCESS)
+    if(ret != KERN_SUCCESS)
         return 0;
 
-    while (1) {
+    while(1)
+    {
         // get next memory region
         ret = vm_region_recurse_64(kernel_task, &addr, &size, &depth, (vm_region_info_t)&info, &info_count);
 
-        if (ret != KERN_SUCCESS)
+        if(ret != KERN_SUCCESS)
             break;
 
-        // the kernel maps over a GB of RAM at the address where it maps
-        // itself so we use that fact to detect it's position
-        if (size > 1024*1024*1024)
+        // the kernel maps over a GB of RAM at the address where
+        // it maps itself, and that region has rwx set to ---.
+        // we can use those two facts to locate it.
+        if(size > 1024*1024*1024 && (info.protection & (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE)) == 0)
             return addr + IMAGE_OFFSET;
 
         addr += size;
