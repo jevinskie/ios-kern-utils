@@ -52,22 +52,22 @@ int main()
     ret = get_kernel_task(&kernel_task);
     if(ret != KERN_SUCCESS)
     {
-        printf("[!] failed to get access to the kernel task\n");
+        printf("[!] Failed to get kernel task\n");
         return -1;
     }
 
     if((kbase = get_kernel_base()) == 0)
     {
-        printf("[!] could not find kernel base address\n");
+        printf("[!] Failed to locate kernel\n");
         return -1;
     }
-    printf("[*] found kernel base at address 0x" ADDR "\n", kbase);
+    printf("[*] Found kernel base at address 0x" ADDR "\n", kbase);
 
-    printf("[*] reading kernel header...\n");
+    printf("[*] Reading kernel header...\n");
     read_kernel(kbase, HEADER_SIZE, buf);
     if(orig_hdr->magic != MACH_HEADER_MAGIC)
     {
-        printf("[!] header has wrong magic, expected: 0x%08x, found: 0x%08x\n", MACH_HEADER_MAGIC, orig_hdr->magic);
+        printf("[!] Header has wrong magic, expected: 0x%08x, found: 0x%08x\n", MACH_HEADER_MAGIC, orig_hdr->magic);
         return -1;
     }
     memcpy(hdr, orig_hdr, sizeof(*hdr));
@@ -103,9 +103,14 @@ int main()
             }
         }
     }
-    binary = calloc(1, filesize);
+    binary = malloc(filesize);
+    if(binary == NULL)
+    {
+        printf("[!] Failed to allocate dump buffer\n");
+        return -1;
+    }
 
-    printf("[*] restoring segments...\n");
+    printf("[*] Restoring segments...\n");
     CMD_ITERATE(orig_hdr, cmd)
     {
         switch(cmd->cmd)
@@ -117,7 +122,7 @@ int main()
 #else
                 seg = (struct segment_command*)cmd;
 #endif
-                printf("[+] found segment %s\n", seg->segname);
+                printf("[+] Found segment %s\n", seg->segname);
                 read_kernel(seg->vmaddr, seg->filesize, binary + seg->fileoff);
             }
             case LC_UUID:
@@ -137,9 +142,14 @@ int main()
 
     // ... and write the final binary to file
     f = fopen("kernel.bin", "wb");
+    if(f == NULL)
+    {
+        printf("[!] Failed to open kdump.bin for writing\n");
+        return -1;
+    }
     fwrite(binary, filesize, 1, f);
 
-    printf("[*] done, wrote 0x%lx bytes\n", filesize);
+    printf("[*] Done, wrote 0x%lx bytes\n", filesize);
     fclose(f);
     free(binary);
     return 0;
