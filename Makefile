@@ -8,8 +8,10 @@ ifndef IGCC
 		else
 			IGCC = clang
 		endif
+		CFLAGS += -Wl,-dead_strip
 	else
 		IGCC = ios-clang
+		CFLAGS += -Wl,--gc-sections
 	endif
 endif
 ifndef IGCC_TARGET
