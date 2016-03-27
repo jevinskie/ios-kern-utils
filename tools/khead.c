@@ -15,6 +15,7 @@
 #include <libkern.h>
 #include <mach-o/binary.h>
 
+// TODO: make header size dynamic
 #define HEADER_SIZE 0x1000
 #if __LP64__
 #define MACH_HEADER_MAGIC MH_MAGIC_64
