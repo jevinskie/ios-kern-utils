@@ -18,32 +18,42 @@
 #include <libkern.h>
 #include <mach-o/binary.h>
 
-// TODO: make header size dynamic
-#define HEADER_SIZE 0x1000
+#define MAX_HEADER_SIZE 0x2000
 
 #define max(a, b) (a) > (b) ? (a) : (b)
+
+#if __LP64__
+typedef struct mach_header_64 mach_hdr_t;
+typedef struct segment_command_64 mach_seg_t;
+#else
+typedef struct mach_header mach_hdr_t;
+typedef struct segment_command mach_seg_t;
+#endif
 
 int main()
 {
     kern_return_t ret;
     task_t kernel_task;
     vm_address_t kbase;
-    unsigned char buf[HEADER_SIZE];      // will hold the original mach-o header and load commands
-    unsigned char header[HEADER_SIZE];   // header for the new mach-o file
-    unsigned char* binary;               // mach-o will be reconstructed in here
     FILE* f;
-    size_t filesize = 0;
-#if __LP64__
-    struct segment_command_64* seg;
-    struct mach_header_64* orig_hdr = (struct mach_header_64*)buf;
-    struct mach_header_64* hdr = (struct mach_header_64*)header;
-#else
-    struct segment_command* seg;
-    struct mach_header* orig_hdr = (struct mach_header*)buf;
-    struct mach_header* hdr = (struct mach_header*)header;
-#endif
+    size_t //headersize = 0,
+           filesize = 0;
+    unsigned char *buf,     // will hold the original mach-o header and load commands
+                  *header,  // header for the new mach-o file
+                  *binary;  // mach-o will be reconstructed in here
+    mach_hdr_t *orig_hdr, *hdr;
+    mach_seg_t *seg;
 
-    memset(header, 0, HEADER_SIZE);
+    buf = (unsigned char*)malloc(MAX_HEADER_SIZE);
+    header = (unsigned char*)malloc(MAX_HEADER_SIZE);
+    if(buf == NULL || header == NULL)
+    {
+        printf("[!] Failed to allocate header buffer\n");
+        return -1;
+    }
+    memset(header, 0, MAX_HEADER_SIZE);
+    orig_hdr = (mach_hdr_t*)buf;
+    hdr = (mach_hdr_t*)header;
 
     ret = get_kernel_task(&kernel_task);
     if(ret != KERN_SUCCESS)
@@ -60,7 +70,7 @@ int main()
     printf("[*] Found kernel base at address 0x" ADDR "\n", kbase);
 
     printf("[*] Reading kernel header...\n");
-    read_kernel(kbase, HEADER_SIZE, buf);
+    read_kernel(kbase, MAX_HEADER_SIZE, buf);
     memcpy(hdr, orig_hdr, sizeof(*hdr));
     hdr->ncmds = 0;
     hdr->sizeofcmds = 0;
@@ -76,22 +86,16 @@ int main()
      * executable.
      */
 
-    // first loop through all segments to determine file size
+    // loop through all segments once to determine file size
     CMD_ITERATE(orig_hdr, cmd)
     {
         switch(cmd->cmd)
         {
             case LC_SEGMENT:
             case LC_SEGMENT_64:
-            {
-#if __LP64__
-                seg = (struct segment_command_64*)cmd;
-#else
-                seg = (struct segment_command*)cmd;
-#endif
+                seg = (mach_seg_t*)cmd;
                 filesize = max(filesize, seg->fileoff + seg->filesize);
                 break;
-            }
         }
     }
     binary = malloc(filesize);
@@ -100,22 +104,19 @@ int main()
         printf("[!] Failed to allocate dump buffer\n");
         return -1;
     }
+    memset(binary, 0, filesize);
 
+    // loop again to restore everything
     printf("[*] Restoring segments...\n");
     CMD_ITERATE(orig_hdr, cmd)
     {
         switch(cmd->cmd)
         {
             case LC_SEGMENT:
-            case LC_SEGMENT_64: {
-#if __LP64__
-                seg = (struct segment_command_64*)cmd;
-#else
-                seg = (struct segment_command*)cmd;
-#endif
+            case LC_SEGMENT_64:
+                seg = (mach_seg_t*)cmd;
                 printf("[+] Found segment %s\n", seg->segname);
                 read_kernel(seg->vmaddr, seg->filesize, binary + seg->fileoff);
-            }
             case LC_UUID:
             case LC_UNIXTHREAD:
             case 0x25:
@@ -143,5 +144,6 @@ int main()
     printf("[*] Done, wrote 0x%lx bytes\n", filesize);
     fclose(f);
     free(binary);
+    free(buf);
     return 0;
 }

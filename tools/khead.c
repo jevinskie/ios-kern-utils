@@ -15,13 +15,11 @@
 #include <libkern.h>
 #include <mach-o/binary.h>
 
-// TODO: make header size dynamic
-#define HEADER_SIZE 0x1000
+#define MAX_HEADER_SIZE 0x2000
+
 #if __LP64__
-#define MACH_HEADER_MAGIC MH_MAGIC_64
 typedef struct mach_header_64 mach_hdr_t;
 #else
-#define MACH_HEADER_MAGIC MH_MAGIC
 typedef struct mach_header mach_hdr_t;
 #endif
 
@@ -156,8 +154,8 @@ int main()
     kern_return_t ret;
     task_t kernel_task;
     vm_address_t kbase;
-    unsigned char buf[HEADER_SIZE];
-    mach_hdr_t *hdr = (mach_hdr_t*)buf;
+    unsigned char *buf;
+    mach_hdr_t *hdr;
     struct segment_command_64 *seg64;
     struct segment_command *seg32;
     struct section_64 *sec64;
@@ -168,6 +166,13 @@ int main()
     rwx_t init_rwx, max_rwx;
     int i;
 
+    buf = (unsigned char*)malloc(MAX_HEADER_SIZE);
+    if(buf == NULL)
+    {
+        printf("[!] Failed to allocate header buffer\n");
+        return -1;
+    }
+    hdr = (mach_hdr_t*)buf;
     ret = get_kernel_task(&kernel_task);
     if(ret != KERN_SUCCESS)
     {
@@ -179,13 +184,7 @@ int main()
         printf("[!] could not find kernel base address\n");
         return -1;
     }
-    memset(buf, 0, HEADER_SIZE);
-    read_kernel(kbase, HEADER_SIZE, buf);
-    if(hdr->magic != MACH_HEADER_MAGIC)
-    {
-        printf("[!] header has wrong magic, expected: 0x%08x, found: 0x%08x\n", MACH_HEADER_MAGIC, hdr->magic);
-        return -1;
-    }
+    read_kernel(kbase, MAX_HEADER_SIZE, buf);
     CMD_ITERATE(hdr, cmd)
     {
         switch(cmd->cmd)
