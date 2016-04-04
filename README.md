@@ -19,7 +19,7 @@ Head over to [Releases](https://github.com/Siguza/ios-kern-utils/releases). :)
 A kernel patch is required for these tools to work, since the API for getting the kernel task is natively disabled for obvious reasons.  
 That patch is normally referred to as `tfp0` or `task_for_pid0`, and is included (in some form) in almost every public jailbreak.
 
-The latest release is confirmed to work with:
+The latest release of these tools is confirmed to work with:
 
 * p0sixspwn on 6.1.6
 * TaiG on 8.4
