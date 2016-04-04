@@ -8,11 +8,26 @@ Head over to [Releases](https://github.com/Siguza/ios-kern-utils/releases). :)
 ### Prerequisites
 
 * Jailbroken Device
-* `task_for_pid0` kernel patch (probably the case if jailbroken on iOS < 9)
+* `tfp0` kernel patch (see below)
 * If you don't have XCode:
   * GNU make
   * C compiler for iOS
   * Code signing utility
+
+### `tfp0` compatibility
+
+A kernel patch is required for these tools to work, since the API for getting the kernel task is natively disabled for obvious reasons.  
+That patch is normally referred to as `tfp0` or `task_for_pid0`, and is included (in some form) in almost every public jailbreak.
+
+The latest release is confirmed to work with:
+
+* p0sixspwn on 6.1.6
+* TaiG on 8.4
+* Pangu9 on 9.1
+
+It is confirmed to **NOT** work with:
+
+* Pangu9 on 9.0.x
 
 ### Tools
 
@@ -22,6 +37,7 @@ kdump | Dump a running iOS kernel to a file
 kmap | Visualize the kernel address space
 kpatch | Apply patches to a running kernel
 kmem | Dump kernel memory to the console
+khead | Parse and display the Mach-O header of the kernel
 
 ### Build
 
