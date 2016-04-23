@@ -36,16 +36,15 @@ int main()
     task_t kernel_task;
     vm_address_t kbase;
     FILE* f;
-    size_t //headersize = 0,
-           filesize = 0;
+    size_t filesize = 0;
     unsigned char *buf,     // will hold the original mach-o header and load commands
                   *header,  // header for the new mach-o file
                   *binary;  // mach-o will be reconstructed in here
     mach_hdr_t *orig_hdr, *hdr;
     mach_seg_t *seg;
 
-    buf = (unsigned char*)malloc(MAX_HEADER_SIZE);
-    header = (unsigned char*)malloc(MAX_HEADER_SIZE);
+    buf = malloc(MAX_HEADER_SIZE);
+    header = malloc(MAX_HEADER_SIZE);
     if(buf == NULL || header == NULL)
     {
         printf("[!] Failed to allocate header buffer\n");

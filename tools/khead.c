@@ -166,7 +166,7 @@ int main()
     rwx_t init_rwx, max_rwx;
     int i;
 
-    buf = (unsigned char*)malloc(MAX_HEADER_SIZE);
+    buf = malloc(MAX_HEADER_SIZE);
     if(buf == NULL)
     {
         printf("[!] Failed to allocate header buffer\n");
