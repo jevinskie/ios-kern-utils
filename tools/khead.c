@@ -5,24 +5,21 @@
  * Copyright (c) 2016 Siguza
  */
 
-#include <stdbool.h>
-#include <stdio.h>
-#include <stdlib.h>
+#include <stdbool.h>            // bool, true, false
+#include <stdint.h>             // uint32_t, uint64_t
+#include <stdio.h>              // printf
+#include <stdlib.h>             // free, malloc
 
-#include <mach/mach_init.h>
-#include <mach/mach_traps.h>
+#include <mach/kern_return.h>   // KERN_SUCCESS, kern_return_t
+#include <mach/mach_types.h>    // task_t
+#include <mach/vm_types.h>      // vm_address_t
+#include <mach-o/loader.h>      // section, section_64, segment_command, segment_command_64, symtab_command, version_min_command, uuid_command
 
-#include "arch.h"
-#include "libkern.h"
-#include "mach-o.h"
+#include "arch.h"               // mach_hdr_t
+#include "libkern.h"            // get_kernel_task, get_kernel_base, read_kernel
+#include "mach-o.h"             // CMD_ITERATE
 
 #define MAX_HEADER_SIZE 0x2000
-
-#if __LP64__
-typedef struct mach_header_64 mach_hdr_t;
-#else
-typedef struct mach_header mach_hdr_t;
-#endif
 
 typedef struct
 {
@@ -342,4 +339,5 @@ int main()
                 */
         }
     }
+    free(buf);
 }

@@ -1,24 +1,22 @@
 /*
- * kmap.c - Display a listing of the kernel memory mappings.
+ * kmap.c - Display a listing of the kernel memory mappings
  *
  * Copyright (c) 2014 Samuel Groß
  * Copyright (c) 2016 Siguza
  */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
+#include <stdio.h>              // printf
 
-#include <mach/mach_init.h>
-#include <mach/mach_error.h>
-#include <mach/mach_traps.h>
-#include <mach/mach_types.h>
-#include <mach/host_priv.h>
-#include <mach/vm_map.h>
+#include <mach/kern_return.h>   // KERN_SUCCESS, kern_return_t
+#include <mach/mach_types.h>    // task_t
+#include <mach/message.h>       // mach_msg_type_number_t
+#include <mach/vm_map.h>        // vm_region_recurse_64
+#include <mach/vm_prot.h>       // VM_PROT_READ, VM_PROT_WRITE, VM_PROT_EXECUTE
+#include <mach/vm_region.h>     // VM_REGION_SUBMAP_INFO_COUNT_64, vm_region_info_t, vm_region_submap_info_data_64_t
+#include <mach/vm_types.h>      // vm_address_t, vm_size_t
 
-#include "arch.h"
-#include "libkern.h"
+#include "arch.h"               // ADDR
+#include "libkern.h"            // get_kernel_task
 
 int main()
 {

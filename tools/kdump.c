@@ -1,23 +1,21 @@
 /*
- * kdump.c - Kernel dumper code
+ * kdump.c - Dump the kernel
  *
  * Copyright (c) 2014 Samuel Groß
  * Copyright (c) 2016 Siguza
  */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
+#include <stdio.h>              // FILE, fopen, fwrite, fclose printf
+#include <stdlib.h>             // free, malloc
+#include <string.h>             // memcpy, memset
 
-#include <mach/mach_init.h>
-#include <mach/mach_types.h>
-#include <mach/host_priv.h>
-#include <mach/vm_map.h>
+#include <mach/kern_return.h>   // KERN_SUCCESS, kern_return_t
+#include <mach/mach_types.h>    // task_t
+#include <mach/vm_types.h>      // vm_address_t
 
-#include "arch.h"
-#include "libkern.h"
-#include "mach-o.h"
+#include "arch.h"               // ADDR, mach_hdr_t, mach_seg_t
+#include "libkern.h"            // get_kernel_task, get_kernel_base, read_kernel
+#include "mach-o.h"             // CMD_ITERATE
 
 #define MAX_HEADER_SIZE 0x2000
 
@@ -47,8 +45,7 @@ int main()
     orig_hdr = (mach_hdr_t*)buf;
     hdr = (mach_hdr_t*)header;
 
-    ret = get_kernel_task(&kernel_task);
-    if(ret != KERN_SUCCESS)
+    if((ret = get_kernel_task(&kernel_task)) != KERN_SUCCESS)
     {
         printf("[!] Failed to get kernel task\n");
         return -1;
@@ -135,7 +132,10 @@ int main()
 
     printf("[*] Done, wrote 0x%lx bytes\n", filesize);
     fclose(f);
+
     free(binary);
+    free(header);
     free(buf);
+
     return 0;
 }

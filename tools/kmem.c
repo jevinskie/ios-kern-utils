@@ -1,22 +1,19 @@
 /*
- * kmem.c - Read kernel memory and dump it to the console.
+ * kmem.c - Read kernel memory and dump it to the console
  *
  * Copyright (c) 2014 Samuel Groß
  * Copyright (c) 2016 Siguza
  */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
+#include <stdio.h>              // printf
+#include <stdlib.h>             // free, malloc, strtoul
+#include <string.h>             // memset
+#include <unistd.h>             // getopt, write
 
-#include <mach/mach_init.h>
-#include <mach/mach_types.h>
-#include <mach/host_priv.h>
-#include <mach/vm_map.h>
+#include <mach/vm_types.h>      // vm_address_t, vm_size_t
 
-#include "arch.h"
-#include "libkern.h"
+#include "arch.h"               // ADDR
+#include "libkern.h"            // read_kernel
 
 void hexdump(unsigned char *data, size_t size)
 {

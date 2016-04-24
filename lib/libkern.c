@@ -5,20 +5,22 @@
  * Copyright (c) 2016 Siguza
  */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
+#include <stdlib.h>             // free, malloc
+#include <string.h>             // memmem
 
-#include <mach/mach_init.h>
-#include <mach/mach_error.h>
-#include <mach/mach_traps.h>
-#include <mach/mach_types.h>
-#include <mach/host_priv.h>
-#include <mach/vm_map.h>
-#include <mach-o/loader.h>
+#include <mach/host_priv.h>     // host_get_special_port
+#include <mach/kern_return.h>   // KERN_SUCCESS, kern_return_t
+#include <mach/mach_init.h>     // mach_host_self, mach_task_self
+#include <mach/message.h>       // mach_msg_type_number_t
+#include <mach/mach_traps.h>    // task_for_pid
+#include <mach/mach_types.h>    // task_t
+#include <mach/vm_prot.h>       // VM_PROT_READ, VM_PROT_WRITE, VM_PROT_EXECUTE
+#include <mach/vm_region.h>     // VM_REGION_SUBMAP_INFO_COUNT_64, vm_region_info_t, vm_region_submap_info_data_64_t
+#include <mach/vm_map.h>        // vm_read_overwrite, vm_region_recurse_64, vm_write
+#include <mach/vm_types.h>      // vm_address_t, vm_size_t
+#include <mach-o/loader.h>      // MH_EXECUTE
 
-#include "arch.h"
+#include "arch.h"               // IMAGE_OFFSET, MACH_TYPE, MACH_HEADER_MAGIC, mach_hdr_t
 #include "libkern.h"
 
 #define MAX_CHUNK_SIZE 0xFFF
@@ -147,8 +149,7 @@ vm_size_t read_kernel(vm_address_t addr, vm_size_t size, unsigned char* buf)
 {
     kern_return_t ret;
     task_t kernel_task;
-    vm_size_t remainder = size;
-    vm_size_t bytes_read = 0;
+    vm_size_t remainder = size, bytes_read = 0;
 
     ret = get_kernel_task(&kernel_task);
     if(ret != KERN_SUCCESS)
