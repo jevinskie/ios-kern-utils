@@ -1,5 +1,7 @@
 ALL = kdump khead kmap kmem kpatch
-CFLAGS = -Wall -Wno-unused-local-typedef -Ilib/kernel -Ilib/binary lib/kernel/*.c lib/binary/*.c lib/binary/*/*.c
+DST = build
+PKG = ios-kern-utils.tar.xz
+CFLAGS = -O3 -Wall -Ilib lib/*.c
 
 ifndef IGCC
 	ifeq ($(shell uname -s),Darwin)
@@ -30,41 +32,29 @@ ifndef SIGN
 endif
 ifndef SIGN_FLAGS
 	ifeq ($(SIGN),codesign)
-		SIGN_FLAGS = -s - --entitlements misc/ent.xml
+		SIGN_FLAGS = -s - --entitlements misc/ent.plist
 	else
 		ifeq ($(SIGN),ldid)
-			SIGN_FLAGS = -Smisc/ent.xml
+			SIGN_FLAGS = -Smisc/ent.plist
 		endif
 	endif
 endif
 
-all: $(ALL)
+.PHONY: all clean package
 
-kdump: build
-	$(IGCC) $(IGCC_FLAGS) $(IGCC_TARGET) -o build/kdump $(CFLAGS) tools/kdump.c
-	$(SIGN) $(SIGN_FLAGS) build/kdump
+all: $(addprefix $(DST)/, $(ALL))
 
-khead: build
-	$(IGCC) $(IGCC_FLAGS) $(IGCC_TARGET) -o build/khead $(CFLAGS) tools/khead.c
-	$(SIGN) $(SIGN_FLAGS) build/khead
+$(DST)/%: $(filter-out $(wildcard $(DST)), $(DST))
+	$(IGCC) $(IGCC_FLAGS) $(IGCC_TARGET) -o $@ $(CFLAGS) tools/$(@F).c
+	$(SIGN) $(SIGN_FLAGS) $@
 
-kmap: build
-	$(IGCC) $(IGCC_FLAGS) $(IGCC_TARGET) -o build/kmap $(CFLAGS) tools/kmap.c
-	$(SIGN) $(SIGN_FLAGS) build/kmap
+$(DST):
+	mkdir $(DST)
 
-kmem: build
-	$(IGCC) $(IGCC_FLAGS) $(IGCC_TARGET) -o build/kmem $(CFLAGS) tools/kmem.c
-	$(SIGN) $(SIGN_FLAGS) build/kmem
+package: $(PKG)
 
-kpatch: build
-	$(IGCC) $(IGCC_FLAGS) $(IGCC_TARGET) -o build/kpatch $(CFLAGS) tools/kpatch.c
-	$(SIGN) $(SIGN_FLAGS) build/kpatch
-
-build:
-	mkdir build
+$(PKG): $(addprefix $(DST)/, $(ALL))
+	tar -cJf $(PKG) -C $(DST) $(ALL)
 
 clean:
-	rm -rf build
-
-package: all
-	tar -cJf build/ios-kern-utils.tar.xz -C build $(ALL)
+	rm -rf $(DST) $(PKG)

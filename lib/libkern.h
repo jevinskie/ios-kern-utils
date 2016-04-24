@@ -1,5 +1,5 @@
 /*
- * kern.h - Libkern library.
+ * libkern.h - Everything that touches the kernel.
  *
  * Copyright (c) 2014 Samuel Groß
  * Copyright (c) 2016 Siguza
@@ -8,11 +8,9 @@
 #ifndef LIBKERN_H
 #define LIBKERN_H
 
-#include <mach/kern_return.h>
-#include <mach/mach_types.h>
-#include <mach/vm_types.h>
-
-#include "arch.h"
+#include <mach/kern_return.h>   // kern_return_t
+#include <mach/mach_types.h>    // task_t
+#include <mach/vm_types.h>      // vm_address_t, vm_size_t
 
 /*
  * Functions to interact with the kernel address space.
@@ -29,7 +27,7 @@
  * This function should be safe at least on iOS 8 and earlier.
  */
 
-kern_return_t get_kernel_task(task_t*);
+kern_return_t get_kernel_task(task_t *task);
 
 /*
  * Return the base address of the running kernel.
@@ -43,21 +41,20 @@ vm_address_t get_kernel_base();
  *
  * Returns the number of bytes read.
  */
-vm_size_t read_kernel(vm_address_t, vm_size_t, unsigned char*);
+vm_size_t read_kernel(vm_address_t addr, vm_size_t size, unsigned char* buf);
 
 /*
  * Write data into the kernel address space.
  *
  * Returns the number of bytes written.
  */
-vm_size_t write_kernel(vm_address_t, unsigned char*, vm_size_t);
+vm_size_t write_kernel(vm_address_t addr, unsigned char* data, vm_size_t size);
 
 /*
  * Find the given byte sequence in the kernel address space between start and end.
  *
  * Returns the address of the first occurance of bytes if found, otherwise 0.
  */
-vm_address_t find_bytes_kern(vm_address_t, vm_address_t, unsigned char*, size_t);
-
+vm_address_t find_bytes_kern(vm_address_t start, vm_address_t end, unsigned char* bytes, size_t length);
 
 #endif

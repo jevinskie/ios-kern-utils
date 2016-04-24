@@ -12,8 +12,9 @@
 #include <mach/mach_init.h>
 #include <mach/mach_traps.h>
 
-#include <libkern.h>
-#include <mach-o/binary.h>
+#include "arch.h"
+#include "libkern.h"
+#include "mach-o.h"
 
 #define MAX_HEADER_SIZE 0x2000
 

@@ -17,7 +17,8 @@
 #include <mach/host_priv.h>
 #include <mach/vm_map.h>
 
-#include <libkern.h>
+#include "arch.h"
+#include "libkern.h"
 
 int main()
 {

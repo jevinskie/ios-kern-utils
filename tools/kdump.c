@@ -15,20 +15,13 @@
 #include <mach/host_priv.h>
 #include <mach/vm_map.h>
 
-#include <libkern.h>
-#include <mach-o/binary.h>
+#include "arch.h"
+#include "libkern.h"
+#include "mach-o.h"
 
 #define MAX_HEADER_SIZE 0x2000
 
 #define max(a, b) (a) > (b) ? (a) : (b)
-
-#if __LP64__
-typedef struct mach_header_64 mach_hdr_t;
-typedef struct segment_command_64 mach_seg_t;
-#else
-typedef struct mach_header mach_hdr_t;
-typedef struct segment_command mach_seg_t;
-#endif
 
 int main()
 {

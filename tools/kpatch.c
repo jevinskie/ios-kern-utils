@@ -2,6 +2,7 @@
  * kpatch.c - Apply patches to a running kenel.
  *
  * Copyright (c) 2014 Samuel Groß
+ * Copyright (c) 2016 Siguza
  */
 
 #include <stdio.h>
@@ -9,8 +10,8 @@
 
 #include <sys/sysctl.h>     // sysctlbyname
 
-#include <libkern.h>
-
+#include "arch.h"
+#include "libkern.h"
 
 int main(int argc, char** argv)
 {

@@ -2,6 +2,7 @@
  * kmem.c - Read kernel memory and dump it to the console.
  *
  * Copyright (c) 2014 Samuel Groß
+ * Copyright (c) 2016 Siguza
  */
 
 #include <stdio.h>
@@ -14,7 +15,8 @@
 #include <mach/host_priv.h>
 #include <mach/vm_map.h>
 
-#include <libkern.h>
+#include "arch.h"
+#include "libkern.h"
 
 void hexdump(unsigned char *data, size_t size)
 {
