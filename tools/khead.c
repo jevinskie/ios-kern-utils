@@ -7,7 +7,7 @@
 
 #include <stdbool.h>            // bool, true, false
 #include <stdint.h>             // uint32_t, uint64_t
-#include <stdio.h>              // printf
+#include <stdio.h>              // printf, fprintf, stderr
 #include <stdlib.h>             // free, malloc
 
 #include <mach/kern_return.h>   // KERN_SUCCESS, kern_return_t
@@ -149,7 +149,6 @@ static void print_section_attributes(uint32_t bits)
 
 int main()
 {
-    kern_return_t ret;
     task_t kernel_task;
     vm_address_t kbase;
     unsigned char *buf;
@@ -167,21 +166,23 @@ int main()
     buf = malloc(MAX_HEADER_SIZE);
     if(buf == NULL)
     {
-        printf("[!] Failed to allocate header buffer\n");
+        fprintf(stderr, "[!] Failed to allocate header buffer\n");
         return -1;
     }
     hdr = (mach_hdr_t*)buf;
-    ret = get_kernel_task(&kernel_task);
-    if(ret != KERN_SUCCESS)
+
+    if(get_kernel_task(&kernel_task) != KERN_SUCCESS)
     {
-        printf("[!] failed to get access to the kernel task\n");
+        fprintf(stderr, "[!] Failed to get kernel task\n");
         return -1;
     }
+
     if((kbase = get_kernel_base()) == 0)
     {
-        printf("[!] could not find kernel base address\n");
+        fprintf(stderr, "[!] Failed to locate kernel\n");
         return -1;
     }
+
     read_kernel(kbase, MAX_HEADER_SIZE, buf);
     CMD_ITERATE(hdr, cmd)
     {
@@ -339,5 +340,7 @@ int main()
                 */
         }
     }
+
     free(buf);
+    return 0;
 }

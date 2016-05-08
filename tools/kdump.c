@@ -5,7 +5,7 @@
  * Copyright (c) 2016 Siguza
  */
 
-#include <stdio.h>              // FILE, fopen, fwrite, fclose printf
+#include <stdio.h>              // FILE, fopen, fwrite, fclose, fprintf, stderr
 #include <stdlib.h>             // free, malloc
 #include <string.h>             // memcpy, memset
 
@@ -23,7 +23,6 @@
 
 int main()
 {
-    kern_return_t ret;
     task_t kernel_task;
     vm_address_t kbase;
     FILE* f;
@@ -38,27 +37,27 @@ int main()
     header = malloc(MAX_HEADER_SIZE);
     if(buf == NULL || header == NULL)
     {
-        printf("[!] Failed to allocate header buffer\n");
+        fprintf(stderr, "[!] Failed to allocate header buffer\n");
         return -1;
     }
     memset(header, 0, MAX_HEADER_SIZE);
     orig_hdr = (mach_hdr_t*)buf;
     hdr = (mach_hdr_t*)header;
 
-    if((ret = get_kernel_task(&kernel_task)) != KERN_SUCCESS)
+    if(get_kernel_task(&kernel_task) != KERN_SUCCESS)
     {
-        printf("[!] Failed to get kernel task\n");
+        fprintf(stderr, "[!] Failed to get kernel task\n");
         return -1;
     }
 
     if((kbase = get_kernel_base()) == 0)
     {
-        printf("[!] Failed to locate kernel\n");
+        fprintf(stderr, "[!] Failed to locate kernel\n");
         return -1;
     }
-    printf("[*] Found kernel base at address 0x" ADDR "\n", kbase);
+    fprintf(stderr, "[*] Found kernel base at address 0x" ADDR "\n", kbase);
 
-    printf("[*] Reading kernel header...\n");
+    fprintf(stderr, "[*] Reading kernel header...\n");
     read_kernel(kbase, MAX_HEADER_SIZE, buf);
     memcpy(hdr, orig_hdr, sizeof(*hdr));
     hdr->ncmds = 0;
@@ -90,13 +89,13 @@ int main()
     binary = malloc(filesize);
     if(binary == NULL)
     {
-        printf("[!] Failed to allocate dump buffer\n");
+        fprintf(stderr, "[!] Failed to allocate dump buffer\n");
         return -1;
     }
     memset(binary, 0, filesize);
 
     // loop again to restore everything
-    printf("[*] Restoring segments...\n");
+    fprintf(stderr, "[*] Restoring segments...\n");
     CMD_ITERATE(orig_hdr, cmd)
     {
         switch(cmd->cmd)
@@ -104,7 +103,7 @@ int main()
             case LC_SEGMENT:
             case LC_SEGMENT_64:
                 seg = (mach_seg_t*)cmd;
-                printf("[+] Found segment %s\n", seg->segname);
+                fprintf(stderr, "[+] Found segment %s\n", seg->segname);
                 read_kernel(seg->vmaddr, seg->filesize, binary + seg->fileoff);
             case LC_UUID:
             case LC_UNIXTHREAD:
@@ -125,12 +124,12 @@ int main()
     f = fopen("kernel.bin", "wb");
     if(f == NULL)
     {
-        printf("[!] Failed to open kdump.bin for writing\n");
+        fprintf(stderr, "[!] Failed to open kdump.bin for writing\n");
         return -1;
     }
     fwrite(binary, filesize, 1, f);
 
-    printf("[*] Done, wrote 0x%lx bytes\n", filesize);
+    fprintf(stderr, "[*] Done, wrote 0x%lx bytes\n", filesize);
     fclose(f);
 
     free(binary);

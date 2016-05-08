@@ -5,7 +5,7 @@
  * Copyright (c) 2016 Siguza
  */
 
-#include <stdio.h>              // printf
+#include <stdio.h>              // fprintf, stderr
 #include <string.h>             // memset, strlen
 
 #include <mach/kern_return.h>   // KERN_SUCCESS, kern_return_t
@@ -15,7 +15,7 @@
 #include "arch.h"               // ADDR
 #include "libkern.h"            // get_kernel_base, find_bytes_kern, write_kernel
 
-int main(int argc, char** argv)
+int main(int argc, char **argv)
 {
     char uuid[0x50];
     size_t size = 0x50;
@@ -25,28 +25,28 @@ int main(int argc, char** argv)
 
     if(argc < 2)
     {
-        printf("Usage: kpatch new-uuid\n");
+        fprintf(stderr, "Usage: %s new-uuid\n", argv[0]);
         return -1;
     }
     if((ret = sysctlbyname("kern.uuid", uuid, &size, NULL, 0)) != KERN_SUCCESS)
     {
-        printf("[!] failed to create uuid, sysctlbyname returned %i\n", ret);
+        fprintf(stderr, "[!] Failed to create UUID, sysctlbyname returned %i\n", ret);
         return -1;
     }
-    printf("[*] uuid: %s\n", uuid);
+    fprintf(stderr, "[*] UUID: %s\n", uuid);
     if((kbase = get_kernel_base()) == 0)
     {
-        printf("[!] failed to get the kernel base address\n");
+        fprintf(stderr, "[!] Failed to locate kernel\n");
         return -1;
     }
     if((uuid_addr = find_bytes_kern(kbase, kbase + 0x1000000, (unsigned char*)uuid, strlen(uuid))) == 0)
     {
-        printf("[!] failed to find the uuid in kernel memory\n");
+        fprintf(stderr, "[!] Failed to find UUID in kernel memory\n");
         return -1;
     }
-    printf("[*] found uuid at 0x" ADDR "\n", uuid_addr);
+    fprintf(stderr, "[*] Found UUID at 0x" ADDR "\n", uuid_addr);
     write_kernel(uuid_addr, (unsigned char*)argv[1], strlen(argv[1]) + 1);
-    printf("[*] done, check \"sysctl kern.uuid\"\n");
+    fprintf(stderr, "[*] Done, check \"sysctl kern.uuid\"\n");
 
     return 0;
 }

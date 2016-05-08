@@ -5,7 +5,7 @@
  * Copyright (c) 2016 Siguza
  */
 
-#include <stdio.h>              // printf
+#include <stdio.h>              // printf, fprintf, stderr
 
 #include <mach/kern_return.h>   // KERN_SUCCESS, kern_return_t
 #include <mach/mach_types.h>    // task_t
@@ -20,12 +20,11 @@
 
 int main()
 {
-    kern_return_t ret;
     task_t kernel_task;
 
-    ret = get_kernel_task(&kernel_task);
-    if (ret != KERN_SUCCESS) {
-        printf("[!] failed to access the kernel task\n");
+    if(get_kernel_task(&kernel_task) != KERN_SUCCESS)
+    {
+        fprintf(stderr, "[!] Failed to get kernel task\n");
         return -1;
     }
 
@@ -33,22 +32,24 @@ int main()
     vm_size_t size;
     mach_msg_type_number_t info_count = VM_REGION_SUBMAP_INFO_COUNT_64;
     unsigned int depth = 0;
-    vm_address_t addr = 0x80000000;
+    vm_address_t addr = 0;
     size_t displaysize;
     char scale;
     char curR, curW, curX, maxR, maxW, maxX;
 
-    while (1) {
+    while (1)
+    {
         // get next memory region
-        ret = vm_region_recurse_64(kernel_task, &addr, &size, &depth, (vm_region_info_t)&info, &info_count);
-
-        if (ret != KERN_SUCCESS)
+        if(vm_region_recurse_64(kernel_task, &addr, &size, &depth, (vm_region_info_t)&info, &info_count) != KERN_SUCCESS)
+        {
             break;
+        }
 
         // size
         scale = 'K';
         displaysize = size / 1024;
-        if (displaysize > 99999) {
+        if(displaysize > 99999)
+        {
             scale = 'M';
             displaysize /= 1024;
         }
