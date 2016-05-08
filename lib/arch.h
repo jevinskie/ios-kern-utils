@@ -12,6 +12,7 @@
 
 #if __LP64__
 #   define ADDR "%16lx"
+#   define SIZE "%lu"
 #   define IMAGE_OFFSET 0x2000
 #   define MACH_TYPE CPU_TYPE_ARM64
 #   define MACH_HEADER_MAGIC MH_MAGIC_64
@@ -19,6 +20,7 @@
     typedef struct segment_command_64 mach_seg_t;
 #else
 #   define ADDR "%8x"
+#   define SIZE "%u"
 #   define IMAGE_OFFSET 0x1000
 #   define MACH_TYPE CPU_TYPE_ARM
 #   define MACH_HEADER_MAGIC MH_MAGIC
