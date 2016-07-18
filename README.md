@@ -16,8 +16,8 @@ Head over to [Releases](https://github.com/Siguza/ios-kern-utils/releases). :)
 
 ### `tfp0` compatibility
 
-A kernel patch is required for these tools to work, since the API for getting the kernel task is natively disabled for obvious reasons.  
-That patch is normally referred to as `tfp0` or `task_for_pid0`, and is included (in some form) in almost every public jailbreak.
+A kernel patch is required for these tools to work, since access to kernel memory is natively unavailable for obvious reasons.  
+That patch is normally referred to as `task-for-pid-zero` (short `tfp0`), and is included in almost every public jailbreak.
 
 The latest release of these tools is confirmed to work with:
 
@@ -25,7 +25,7 @@ The latest release of these tools is confirmed to work with:
 * TaiG on 8.4
 * Pangu9 on 9.1
 
-It is confirmed to **NOT** work with:
+Jailbreaks that **DO NOT** enable `tfp0`, and thus **DO NOT** work with kern-utils:
 
 * Pangu9 on 9.0.x
 
