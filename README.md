@@ -25,9 +25,12 @@ The latest release of these tools is confirmed to work with:
 * TaiG on 8.4
 * Pangu9 on 9.1
 
-Jailbreaks that **DO NOT** enable `tfp0`, and thus **DO NOT** work with kern-utils:
+Jailbreaks that **DO NOT** seem to enable `tfp0`, and thus **DO NOT** work with kern-utils:
 
 * Pangu9 on 9.0.x
+* Pangu9 on 9.2-9.3.3
+
+If you have information about how the kernel task port can be obtained in these versions, please [open a ticket](https://github.com/Siguza/ios-kern-utils/issues/new) and tell me.
 
 ### Tools
 
@@ -45,15 +48,56 @@ khead | Parse and display the Mach-O header of the kernel
     cd ios-kern-utils
     make
 
-You may also specify the following environment variables:
+For `make` you may also specify the following environment variables:
 
-Name | Function | Default value
-:-: | :-- | :--
-`IGCC` | iOS compiler command | **OS X**: `xcrun -sdk iphoneos gcc`<br>**Linux**: `ios-clang`<br>**iOS**: `clang`
-`IGCC_TARGET` | target flags | `-arch armv7 -arch arm64`
-`IGCC_FLAGS` | compiler flags | *none*
-`SIGN` | code signing utility | **OS X**: `codesign`<br>**Linux**: `ldid`<br>**iOS**: `ldid`
-`SIGN_FLAGS` | code signing flags | if `SIGN == codesign`: `-s - --entitlements misc/ent.xml`<br>if `SIGN == ldid`: `-Smisc/ent.xml`<br>otherwise: *none*
+<table>
+    <tr>
+        <th align="center" rowspan="2">Name</th>
+        <th align="center" rowspan="2">Function</th>
+        <th align="center" colspan="3">Default value</th>
+    </tr>
+    <tr>
+        <th align="center">OS X</th>
+        <th align="center">iOS</th>
+        <th align="center">Linux</th>
+    </tr>
+    <tr>
+        <td align="center"><code>IGCC</code></td>
+        <td align="center">iOS compiler</td>
+        <td align="center"><code>xcrun -sdk iphoneos gcc</code></td>
+        <td align="center"><code>clang</code></td>
+        <td align="center"><code>ios-clang</code></td>
+    </tr>
+    <tr>
+        <td align="center"><code>IGCC_ARCH</code></td>
+        <td align="center">Target architecture(s)</td>
+        <td align="center" colspan="3"><code>-arch armv7 -arch arm64</code></td>
+    </tr>
+    <tr>
+        <td align="center"><code>IGCC_FLAGS</code></td>
+        <td align="center">Custom compiler flags</td>
+        <td align="center" colspan="3"><i>none</i></td>
+    </tr>
+    <tr>
+        <td align="center"><code>STRIP</code></td>
+        <td align="center">Symbol remover utility</td>
+        <td align="center"><code>xcrun -sdk iphoneos strip</code></td>
+        <td align="center"><code>strip</code></td>
+        <td align="center"><code>ios-strip</code></td>
+    </tr>
+    <tr>
+        <td align="center"><code>SIGN</code></td>
+        <td align="center">Code signing utility</td>
+        <td align="center"><code>codesign</code></td>
+        <td align="center" colspan="2"><code>ldid</code></td>
+    </tr>
+    <tr>
+        <td align="center"><code>SIGN_FLAGS</code></td>
+        <td align="center">Code signing flags</td>
+        <td align="center"><code>-s - --entitlements misc/ent.xml</code></td>
+        <td align="center" colspan="2"><code>-Smisc/ent.xml</code></td>
+    </tr>
+</table>
 
 ### TODO
 

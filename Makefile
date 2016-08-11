@@ -16,8 +16,19 @@ ifndef IGCC
 		CFLAGS += -Wl,--gc-sections
 	endif
 endif
-ifndef IGCC_TARGET
-	IGCC_TARGET = -arch armv7 -arch arm64
+ifndef IGCC_ARCH
+	IGCC_ARCH = -arch armv7 -arch arm64
+endif
+ifndef STRIP
+	ifeq ($(shell uname -s),Darwin)
+		ifneq ($(HOSTTYPE),arm)
+			STRIP = xcrun -sdk iphoneos strip
+		else
+			STRIP = $(shell which strip 2>/dev/null)
+		endif
+	else
+		STRIP := $(shell which ios-strip 2>/dev/null)
+	endif
 endif
 ifndef SIGN
 	ifeq ($(shell uname -s),Darwin)
@@ -45,7 +56,10 @@ endif
 all: $(addprefix $(DST)/, $(ALL))
 
 $(DST)/%: $(filter-out $(wildcard $(DST)), $(DST))
-	$(IGCC) $(IGCC_FLAGS) $(IGCC_TARGET) -o $@ $(CFLAGS) tools/$(@F).c
+	$(IGCC) $(IGCC_FLAGS) $(IGCC_ARCH) -o $@ $(CFLAGS) tools/$(@F).c
+ifdef STRIP
+	$(STRIP) $@
+endif
 	$(SIGN) $(SIGN_FLAGS) $@
 
 $(DST):
