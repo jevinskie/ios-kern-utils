@@ -41,6 +41,7 @@ kern_return_t get_kernel_task(task_t *task)
                 return ret;
             }
         }
+        // TODO: catch MACH_PORT_VALID
         initialized = 1;
     }
     *task = kernel_task;

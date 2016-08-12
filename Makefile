@@ -1,7 +1,7 @@
 ALL = kdump khead kmap kmem kpatch
 DST = build
 PKG = ios-kern-utils.tar.xz
-CFLAGS = -O3 -Wall -Ilib lib/*.c
+CFLAGS = -O3 -Wall -Isrc/lib src/lib/*.c
 
 ifndef IGCC
 	ifeq ($(shell uname -s),Darwin)
@@ -55,8 +55,8 @@ endif
 
 all: $(addprefix $(DST)/, $(ALL))
 
-$(DST)/%: $(filter-out $(wildcard $(DST)), $(DST))
-	$(IGCC) $(IGCC_FLAGS) $(IGCC_ARCH) -o $@ $(CFLAGS) tools/$(@F).c
+$(DST)/%: $(filter-out $(wildcard $(DST)), $(DST)) $(wildcard src/lib/**) src/tools/%.c src/tools/%.h
+	$(IGCC) $(IGCC_FLAGS) $(IGCC_ARCH) -o $@ $(CFLAGS) src/tools/$(@F).c
 ifdef STRIP
 	$(STRIP) $@
 endif
