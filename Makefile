@@ -55,7 +55,7 @@ endif
 
 all: $(addprefix $(DST)/, $(ALL))
 
-$(DST)/%: $(filter-out $(wildcard $(DST)), $(DST)) $(wildcard src/lib/**) src/tools/%.c src/tools/%.h
+$(DST)/%: $(filter-out $(wildcard $(DST)), $(DST)) $(wildcard src/lib/**) src/tools/%.c
 	$(IGCC) $(IGCC_FLAGS) $(IGCC_ARCH) -o $@ $(CFLAGS) src/tools/$(@F).c
 ifdef STRIP
 	$(STRIP) $@
