@@ -5,6 +5,7 @@
  * Copyright (c) 2016 Siguza
  */
 
+#include <errno.h>              // errno
 #include <stdbool.h>            // bool, true, false
 #include <stdio.h>              // printf, fprintf
 #include <stdlib.h>             // free, malloc, strtoul
@@ -67,18 +68,11 @@ static void too_few_args(const char *self)
 
 int main(int argc, char **argv)
 {
-    bool raw = false,   // print the raw bytes instead of a hexdump
-         hex = false;
+    bool raw = false; // print raw bytes instead of a hexdump
     task_t kernel_task;
     vm_address_t addr;
     vm_size_t size;
-    char c, *str, *end;
-
-    if(get_kernel_task(&kernel_task) != KERN_SUCCESS)
-    {
-        fprintf(stderr, "[!] Failed to get kernel task\n");
-        return -1;
-    }
+    char c, *end;
 
     while((c = getopt(argc, argv, "rh")) != -1)
     {
@@ -98,50 +92,34 @@ int main(int argc, char **argv)
         too_few_args(argv[0]);
         return -1;
     }
-    else
-    {
-        // addr
-        str = argv[optind];
-        hex = strlen(str) >= 2 && str[0] == '0' && (str[1] == 'x' || str[1] == 'X');
-        if(hex)
-        {
-            str += 2;
-        }
-        if(strlen(str) == 0)
-        {
-            too_few_args(argv[0]);
-            return -1;
-        }
-        addr = strtoul(str, &end, hex ? 16 : 10);
-        if(*end != '\0')
-        {
-            fprintf(stderr, "[!] Invalid character in address: %c\n", *end);
-            return -1;
-        }
 
-        // size
-        str = argv[optind + 1];
-        hex = strlen(str) >= 2 && str[0] == '0' && (str[1] == 'x' || str[1] == 'X');
-        if(hex)
-        {
-            str += 2;
-        }
-        if(strlen(str) == 0)
-        {
-            too_few_args(argv[0]);
-            return -1;
-        }
-        size = strtoul(str, &end, hex ? 16 : 10);
-        if(*end != '\0')
-        {
-            fprintf(stderr, "[!] Invalid character in address: %c\n", *end);
-            return -1;
-        }
-        if(size == 0)
-        {
-            fprintf(stderr, "[!] Size must be > 0\n");
-            return -1;
-        }
+    // addr
+    errno = 0;
+    addr = strtoull(argv[optind], &end, 0);
+    if(argv[optind] == '\0' || *end != '\0' || errno != 0)
+    {
+        fprintf(stderr, "[!] Failed to parse argument: %s\n", argv[optind] == '\0' ? "zero characters gives" : strerror(errno));
+        return -1;
+    }
+
+    // size
+    errno = 0;
+    size = strtoull(argv[optind + 1], &end, 0);
+    if(argv[optind + 1] == '\0' || *end != '\0' || errno != 0)
+    {
+        fprintf(stderr, "[!] Failed to parse argument: %s\n", argv[optind + 1] == '\0' ? "zero characters gives" : strerror(errno));
+        return -1;
+    }
+    if(size == 0)
+    {
+        fprintf(stderr, "[!] Size must be > 0\n");
+        return -1;
+    }
+
+    if(get_kernel_task(&kernel_task) != KERN_SUCCESS)
+    {
+        fprintf(stderr, "[!] Failed to get kernel task\n");
+        return -1;
     }
 
     if(!raw)
