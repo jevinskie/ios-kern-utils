@@ -21,9 +21,10 @@ That patch is normally referred to as `task-for-pid-zero` (short `tfp0`), and is
 
 The latest release of these tools is confirmed to work with:
 
-* p0sixspwn on 6.1.6
+* p0sixspwn on 6.1.x
 * TaiG on 8.4
 * Pangu9 on 9.1
+* [qwertyoruiopz's jailbreakme](https://jbme.qwertyoruiop.com/) on 9.3.x
 
 Jailbreaks that **DO NOT** seem to enable `tfp0`, and thus **DO NOT** work with kern-utils:
 
