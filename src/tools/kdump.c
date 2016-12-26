@@ -14,6 +14,7 @@
 #include <mach/vm_types.h>      // vm_address_t
 
 #include "arch.h"               // ADDR, mach_hdr_t, mach_seg_t
+#include "debug.h"              // slow, verbose
 #include "libkern.h"            // get_kernel_task, get_kernel_base, read_kernel
 #include "mach-o.h"             // CMD_ITERATE
 
@@ -21,7 +22,17 @@
 
 #define max(a, b) (a) > (b) ? (a) : (b)
 
-int main()
+void print_usage(const char *self)
+{
+    fprintf(stderr, "Usage: %s [-h] [-v [-d]] [kernel.bin]\n"
+                    "    -d  Debug mode (sleep between function calls, gives\n"
+                    "        sshd time to deliver output before kernel panic)\n"
+                    "    -h  Print this help\n"
+                    "    -v  Verbose (debug output)\n"
+                    , self);
+}
+
+int main(int argc, const char **argv)
 {
     task_t kernel_task;
     vm_address_t kbase;
@@ -32,6 +43,38 @@ int main()
                   *binary;  // mach-o will be reconstructed in here
     mach_hdr_t *orig_hdr, *hdr;
     mach_seg_t *seg;
+    const char *outfile = "kernel.bin";
+
+    int aoff;
+    for(aoff = 1; aoff < argc; ++aoff)
+    {
+        if(argv[aoff][0] != '-')
+        {
+            break;
+        }
+        if(strcmp(argv[aoff], "-h") == 0)
+        {
+            print_usage(argv[0]);
+            return 0;
+        }
+        if(strcmp(argv[aoff], "-d") == 0)
+        {
+            slow = true;
+        }
+        else if(strcmp(argv[aoff], "-v") == 0)
+        {
+            verbose = true;
+        }
+    }
+    if(aoff - argc >= 2)
+    {
+        fprintf(stderr, "[!] Too many arguments\n");
+        return -1;
+    }
+    else if(aoff - argc == 2)
+    {
+        outfile = argv[aoff];
+    }
 
     buf = malloc(MAX_HEADER_SIZE);
     header = malloc(MAX_HEADER_SIZE);
@@ -121,7 +164,7 @@ int main()
     memcpy(binary, header, sizeof(*hdr) + orig_hdr->sizeofcmds);
 
     // ... and write the final binary to file
-    f = fopen("kernel.bin", "wb");
+    f = fopen(outfile, "wb");
     if(f == NULL)
     {
         fprintf(stderr, "[!] Failed to open kdump.bin for writing\n");
