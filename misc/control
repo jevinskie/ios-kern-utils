@@ -1,0 +1,11 @@
+Package: net.siguza.ios-kern-utils
+Name: kern-utils
+Architecture: iphoneos-arm
+Description: kdump & friends
+ Utilities for playing with the kernel. Requires tfp0 patch.<br>
+ Run with -h for help.<br>
+ <a href="https://github.com/Siguza/ios-kern-utils">Free and open source</a>, forked from <a href="https://github.com/saelo/ios-kern-utils">saelo</a>.
+Maintainer: Siguza <siguza@siguza.net>
+Author: Siguza <siguza@siguza.net>
+Homepage: https://github.com/Siguza/ios-kern-utils
+Section: Development

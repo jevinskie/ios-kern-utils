@@ -1,7 +1,10 @@
-ALL = kdump khead kmap kmem kpatch
+VERSION = 1.1.0
+ALL = $(patsubst src/tools/%.c,%,$(wildcard src/tools/*.c))
 DST = build
-PKG = ios-kern-utils.tar.xz
-CFLAGS = -O3 -Wall -Isrc/lib src/lib/*.c
+PKG = pkg
+XZ = ios-kern-utils.tar.xz
+DEB = net.siguza.ios-kern-utils_$(VERSION)_iphoneos-arm.deb
+CFLAGS = -O3 -Wall -Isrc/lib src/lib/*.c -miphoneos-version-min=6.0
 
 ifndef IGCC
 	ifeq ($(shell uname -s),Darwin)
@@ -51,7 +54,7 @@ ifndef SIGN_FLAGS
 	endif
 endif
 
-.PHONY: all clean package
+.PHONY: all clean dist xz deb
 
 all: $(addprefix $(DST)/, $(ALL))
 
@@ -63,12 +66,34 @@ endif
 	$(SIGN) $(SIGN_FLAGS) $@
 
 $(DST):
-	mkdir $(DST)
+	mkdir -p $(DST)
 
-package: $(PKG)
+dist: xz deb
 
-$(PKG): $(addprefix $(DST)/, $(ALL))
-	tar -cJf $(PKG) -C $(DST) $(ALL)
+xz: $(XZ)
+
+deb: $(DEB)
+
+$(XZ): $(addprefix $(DST)/, $(ALL))
+	tar -cJf $(XZ) -C $(DST) $(ALL)
+
+$(DEB): $(PKG)/control.tar.gz $(PKG)/data.tar.lzma $(PKG)/debian-binary
+	( cd "$(PKG)"; ar -cr "../$(DEB)" 'debian-binary' 'control.tar.gz' 'data.tar.lzma'; )
+
+$(PKG)/control.tar.gz: $(PKG) $(PKG)/control
+	tar -czf '$(PKG)/control.tar.gz' --exclude '.DS_Store' --exclude '._*' --include '$(PKG)' --include '$(PKG)/control' -s '%^$(PKG)%.%' $(PKG)
+
+$(PKG)/data.tar.lzma: $(PKG) $(addprefix $(DST)/, $(ALL)) #misc/template.tar
+	tar -c --lzma -f '$(PKG)/data.tar.lzma' --exclude '.DS_Store' --exclude '._*' -s '%^build%./usr/bin%' @misc/template.tar $(DST)
+
+$(PKG)/debian-binary: $(PKG) $(addprefix $(DST)/, $(ALL))
+	echo '2.0' > "$(PKG)/debian-binary"
+
+$(PKG)/control: $(PKG) misc/control
+	( echo "Version: $(VERSION)"; cat misc/control; ) > $(PKG)/control
+
+$(PKG):
+	mkdir -p $(PKG)
 
 clean:
-	rm -rf $(DST) $(PKG)
+	rm -rf $(DST) $(PKG) $(XZ) $(DEB)
