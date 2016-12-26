@@ -1,1 +1,4 @@
-build
+/build
+/pkg
+/*.tar.xz
+/*.deb
