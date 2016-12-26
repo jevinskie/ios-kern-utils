@@ -11,7 +11,7 @@
 #include <mach-o/loader.h>      // mach_header, mach_header_64, segment_command, segment_command_64
 
 #if __LP64__
-#   define ADDR "%16lx"
+#   define ADDR "%016lx"
 #   define SIZE "%lu"
 #   define IMAGE_OFFSET 0x2000
 #   define MACH_TYPE CPU_TYPE_ARM64
@@ -19,7 +19,7 @@
     typedef struct mach_header_64 mach_hdr_t;
     typedef struct segment_command_64 mach_seg_t;
 #else
-#   define ADDR "%8x"
+#   define ADDR "%08x"
 #   define SIZE "%u"
 #   define IMAGE_OFFSET 0x1000
 #   define MACH_TYPE CPU_TYPE_ARM
