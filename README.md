@@ -44,11 +44,14 @@ kpatch | Apply patches to a running kernel
 kmem | Dump kernel memory to the console
 khead | Parse and display the Mach-O header of the kernel
 
-### Build
+### Building
 
     git clone https://github.com/Siguza/ios-kern-utils
     cd ios-kern-utils
-    make
+    make        # build just the binaries
+    make deb    # build a deb file for Cydia
+    make xz     # package binaries to a .tar.xz
+    make dist   # deb && xz
 
 For `make` you may also specify the following environment variables:
 
@@ -100,6 +103,13 @@ For `make` you may also specify the following environment variables:
         <td align="center" colspan="2"><code>-Smisc/ent.xml</code></td>
     </tr>
 </table>
+
+### License
+
+[MIT](https://github.com/Siguza/cl0ver/blob/master/LICENSE).
+
+[Original project](https://github.com/saelo/ios-kern-utils) by [Samuel Groß](https://github.com/saelo).  
+Maintained and updated for iOS 8 and later by [Siguza](https://github.com/Siguza).  
 
 ### TODO
 
