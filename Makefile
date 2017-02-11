@@ -58,7 +58,7 @@ endif
 
 all: $(addprefix $(DST)/, $(ALL))
 
-$(DST)/%: $(filter-out $(wildcard $(DST)), $(DST)) $(wildcard src/lib/**) src/tools/%.c
+$(DST)/%: $(filter-out $(wildcard $(DST)), $(DST)) $(wildcard src/lib/**) src/tools/%.c | $(DST)
 	$(IGCC) $(IGCC_FLAGS) $(IGCC_ARCH) -o $@ $(CFLAGS) src/tools/$(@F).c
 ifdef STRIP
 	$(STRIP) $@
@@ -80,16 +80,16 @@ $(XZ): $(addprefix $(DST)/, $(ALL))
 $(DEB): $(PKG)/control.tar.gz $(PKG)/data.tar.lzma $(PKG)/debian-binary
 	( cd "$(PKG)"; ar -cr "../$(DEB)" 'debian-binary' 'control.tar.gz' 'data.tar.lzma'; )
 
-$(PKG)/control.tar.gz: $(PKG) $(PKG)/control
-	tar -czf '$(PKG)/control.tar.gz' --exclude '.DS_Store' --exclude '._*' --include '$(PKG)' --include '$(PKG)/control' -s '%^$(PKG)%.%' $(PKG)
+$(PKG)/control.tar.gz: $(PKG)/control
+	tar -czf '$(PKG)/control.tar.gz' --exclude '.DS_Store' --exclude '._*' --exclude 'control.tar.gz' --include '$(PKG)' --include '$(PKG)/control' -s '%^$(PKG)%.%' $(PKG)
 
-$(PKG)/data.tar.lzma: $(PKG) $(addprefix $(DST)/, $(ALL)) #misc/template.tar
+$(PKG)/data.tar.lzma: $(addprefix $(DST)/, $(ALL)) | $(PKG) #misc/template.tar
 	tar -c --lzma -f '$(PKG)/data.tar.lzma' --exclude '.DS_Store' --exclude '._*' -s '%^build%./usr/bin%' @misc/template.tar $(DST)
 
-$(PKG)/debian-binary: $(PKG) $(addprefix $(DST)/, $(ALL))
+$(PKG)/debian-binary: $(addprefix $(DST)/, $(ALL)) | $(PKG)
 	echo '2.0' > "$(PKG)/debian-binary"
 
-$(PKG)/control: $(PKG) misc/control
+$(PKG)/control: misc/control | $(PKG)
 	( echo "Version: $(VERSION)"; cat misc/control; ) > $(PKG)/control
 
 $(PKG):
