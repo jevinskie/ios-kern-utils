@@ -2,7 +2,7 @@
  * libkern.c - Everything that touches the kernel.
  *
  * Copyright (c) 2014 Samuel Groß
- * Copyright (c) 2016 Siguza
+ * Copyright (c) 2016-2017 Siguza
  */
 
 #include <stdlib.h>             // free, malloc
@@ -26,7 +26,7 @@
 #include "debug.h"              // BUGTRACKER_URL, DEBUG
 #include "libkern.h"
 
-#define MAX_CHUNK_SIZE 0xFFF
+#define MAX_CHUNK_SIZE 0xFFF /* MIG limitation */
 
 #define VERIFY_PORT(port, ret) \
 do \
@@ -93,7 +93,7 @@ kern_return_t get_kernel_task(task_t *task)
     return KERN_SUCCESS;
 }
 
-vm_address_t get_kernel_base()
+vm_address_t get_kernel_base(void)
 {
     static vm_address_t addr;
     static char initialized = 0;
@@ -224,7 +224,7 @@ vm_address_t get_kernel_base()
     return addr;
 }
 
-vm_size_t read_kernel(vm_address_t addr, vm_size_t size, unsigned char* buf)
+vm_size_t kernel_read(vm_address_t addr, vm_size_t size, void* buf)
 {
     DEBUG("Reading kernel bytes " ADDR "-" ADDR, addr, addr + size);
     kern_return_t ret;
@@ -243,7 +243,7 @@ vm_size_t read_kernel(vm_address_t addr, vm_size_t size, unsigned char* buf)
     for(vm_address_t end = addr + size; addr < end; remainder -= size)
     {
         size = remainder > MAX_CHUNK_SIZE ? MAX_CHUNK_SIZE : remainder;
-        ret = vm_read_overwrite(kernel_task, addr, size, (vm_address_t)(buf + bytes_read), &size);
+        ret = vm_read_overwrite(kernel_task, addr, size, (vm_address_t)&((char*)buf)[bytes_read], &size);
         if(ret != KERN_SUCCESS || size == 0)
         {
             break;
@@ -255,7 +255,7 @@ vm_size_t read_kernel(vm_address_t addr, vm_size_t size, unsigned char* buf)
     return bytes_read;
 }
 
-vm_size_t write_kernel(vm_address_t addr, unsigned char* data, vm_size_t size)
+vm_size_t kernel_write(vm_address_t addr, vm_size_t size, void* buf)
 {
     DEBUG("Writing to kernel at " ADDR "-" ADDR, addr, addr + size);
     kern_return_t ret;
@@ -272,7 +272,7 @@ vm_size_t write_kernel(vm_address_t addr, unsigned char* data, vm_size_t size)
     for(vm_address_t end = addr + size; addr < end; remainder -= size)
     {
         size = remainder > MAX_CHUNK_SIZE ? MAX_CHUNK_SIZE : remainder;
-        ret = vm_write(kernel_task, addr, (vm_offset_t)(data + bytes_written), size);
+        ret = vm_write(kernel_task, addr, (vm_offset_t)&((char*)buf)[bytes_written], size);
         if (ret != KERN_SUCCESS)
         {
             break;
@@ -284,22 +284,22 @@ vm_size_t write_kernel(vm_address_t addr, unsigned char* data, vm_size_t size)
     return bytes_written;
 }
 
-vm_address_t find_bytes_kern(vm_address_t start, vm_address_t end, unsigned char* bytes, size_t length)
+vm_address_t kernel_find(vm_address_t addr, vm_size_t len, void *buf, size_t size)
 {
     vm_address_t ret = 0;
-    unsigned char* buf = malloc(end - start);
-    if(buf)
+    unsigned char* b = malloc(len);
+    if(b)
     {
         // TODO reading in chunks would probably be better
-        if(read_kernel(start, end - start, buf))
+        if(kernel_read(addr, len, b))
         {
-            void* addr = memmem(buf, end - start, bytes, length);
-            if(addr)
+            void *ptr = memmem(b, len, buf, size);
+            if(ptr)
             {
-                ret = (vm_address_t)addr - (vm_address_t)buf + start;
+                ret = addr + ((char*)ptr - (char*)b);
             }
         }
-        free(buf);
+        free(b);
     }
     return ret;
 }

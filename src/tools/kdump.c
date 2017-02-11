@@ -2,20 +2,21 @@
  * kdump.c - Dump the kernel
  *
  * Copyright (c) 2014 Samuel Groß
- * Copyright (c) 2016 Siguza
+ * Copyright (c) 2016-2017 Siguza
  */
 
+#include <errno.h>              // errno
 #include <stdio.h>              // FILE, fopen, fwrite, fclose, fprintf, stderr
 #include <stdlib.h>             // free, malloc
-#include <string.h>             // memcpy, memset
+#include <string.h>             // memcpy, memset, strerror
 
 #include <mach/kern_return.h>   // KERN_SUCCESS, kern_return_t
 #include <mach/mach_types.h>    // task_t
 #include <mach/vm_types.h>      // vm_address_t
 
-#include "arch.h"               // ADDR, mach_hdr_t, mach_seg_t
+#include "arch.h"               // ADDR, mach_*
 #include "debug.h"              // slow, verbose
-#include "libkern.h"            // get_kernel_task, get_kernel_base, read_kernel
+#include "libkern.h"            // KERNEL_BASE_OR_GTFO, kernel_read
 #include "mach-o.h"             // CMD_ITERATE
 
 #define MAX_HEADER_SIZE 0x2000
@@ -34,7 +35,7 @@ void print_usage(const char *self)
 
 int main(int argc, const char **argv)
 {
-    task_t kernel_task;
+    //task_t kernel_task;
     vm_address_t kbase;
     FILE* f;
     size_t filesize = 0;
@@ -65,6 +66,12 @@ int main(int argc, const char **argv)
         {
             verbose = true;
         }
+        else
+        {
+            fprintf(stderr, "[!] Unrecognized option: %s\n", argv[aoff]);
+            print_usage(argv[0]);
+            return -1;
+        }
     }
     if(aoff - argc >= 2)
     {
@@ -76,32 +83,22 @@ int main(int argc, const char **argv)
         outfile = argv[aoff];
     }
 
+    KERNEL_BASE_OR_GTFO(kbase);
+    fprintf(stderr, "[*] Found kernel base at address 0x" ADDR "\n", kbase);
+
     buf = malloc(MAX_HEADER_SIZE);
     header = malloc(MAX_HEADER_SIZE);
     if(buf == NULL || header == NULL)
     {
-        fprintf(stderr, "[!] Failed to allocate header buffer\n");
+        fprintf(stderr, "[!] Failed to allocate header buffer (%s)\n", strerror(errno));
         return -1;
     }
     memset(header, 0, MAX_HEADER_SIZE);
     orig_hdr = (mach_hdr_t*)buf;
     hdr = (mach_hdr_t*)header;
 
-    if(get_kernel_task(&kernel_task) != KERN_SUCCESS)
-    {
-        fprintf(stderr, "[!] Failed to get kernel task\n");
-        return -1;
-    }
-
-    if((kbase = get_kernel_base()) == 0)
-    {
-        fprintf(stderr, "[!] Failed to locate kernel\n");
-        return -1;
-    }
-    fprintf(stderr, "[*] Found kernel base at address 0x" ADDR "\n", kbase);
-
     fprintf(stderr, "[*] Reading kernel header...\n");
-    read_kernel(kbase, MAX_HEADER_SIZE, buf);
+    kernel_read(kbase, MAX_HEADER_SIZE, buf);
     memcpy(hdr, orig_hdr, sizeof(*hdr));
     hdr->ncmds = 0;
     hdr->sizeofcmds = 0;
@@ -132,7 +129,7 @@ int main(int argc, const char **argv)
     binary = malloc(filesize);
     if(binary == NULL)
     {
-        fprintf(stderr, "[!] Failed to allocate dump buffer\n");
+        fprintf(stderr, "[!] Failed to allocate dump buffer (%s)\n", strerror(errno));
         return -1;
     }
     memset(binary, 0, filesize);
@@ -147,7 +144,7 @@ int main(int argc, const char **argv)
             case LC_SEGMENT_64:
                 seg = (mach_seg_t*)cmd;
                 fprintf(stderr, "[+] Found segment %s\n", seg->segname);
-                read_kernel(seg->vmaddr, seg->filesize, binary + seg->fileoff);
+                kernel_read(seg->vmaddr, seg->filesize, binary + seg->fileoff);
             case LC_UUID:
             case LC_UNIXTHREAD:
             case 0x25:
@@ -167,12 +164,12 @@ int main(int argc, const char **argv)
     f = fopen(outfile, "wb");
     if(f == NULL)
     {
-        fprintf(stderr, "[!] Failed to open kdump.bin for writing\n");
+        fprintf(stderr, "[!] Failed to open %s for writing (%s)\n", outfile, strerror(errno));
         return -1;
     }
     fwrite(binary, filesize, 1, f);
 
-    fprintf(stderr, "[*] Done, wrote 0x%lx bytes\n", filesize);
+    fprintf(stderr, "[*] Done, wrote %lu bytes to %s\n", filesize, outfile);
     fclose(f);
 
     free(binary);

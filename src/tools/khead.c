@@ -2,7 +2,7 @@
  * khead.c - Display kernel header
  *
  * Copyright (c) 2014 Samuel Groß
- * Copyright (c) 2016 Siguza
+ * Copyright (c) 2016-2017 Siguza
  */
 
 #include <stdbool.h>            // bool, true, false
@@ -16,7 +16,7 @@
 #include <mach-o/loader.h>      // section, section_64, segment_command, segment_command_64, symtab_command, version_min_command, uuid_command
 
 #include "arch.h"               // mach_hdr_t
-#include "libkern.h"            // get_kernel_task, get_kernel_base, read_kernel
+#include "libkern.h"            // KERNEL_BASE_OR_GTFO, kernel_read
 #include "mach-o.h"             // CMD_ITERATE
 
 #define MAX_HEADER_SIZE 0x2000
@@ -147,9 +147,8 @@ static void print_section_attributes(uint32_t bits)
     }
 }
 
-int main()
+int main(void)
 {
-    task_t kernel_task;
     vm_address_t kbase;
     unsigned char *buf;
     mach_hdr_t *hdr;
@@ -163,6 +162,8 @@ int main()
     rwx_t init_rwx, max_rwx;
     int i;
 
+    KERNEL_BASE_OR_GTFO(kbase);
+
     buf = malloc(MAX_HEADER_SIZE);
     if(buf == NULL)
     {
@@ -171,19 +172,7 @@ int main()
     }
     hdr = (mach_hdr_t*)buf;
 
-    if(get_kernel_task(&kernel_task) != KERN_SUCCESS)
-    {
-        fprintf(stderr, "[!] Failed to get kernel task\n");
-        return -1;
-    }
-
-    if((kbase = get_kernel_base()) == 0)
-    {
-        fprintf(stderr, "[!] Failed to locate kernel\n");
-        return -1;
-    }
-
-    read_kernel(kbase, MAX_HEADER_SIZE, buf);
+    kernel_read(kbase, MAX_HEADER_SIZE, buf);
     CMD_ITERATE(hdr, cmd)
     {
         switch(cmd->cmd)

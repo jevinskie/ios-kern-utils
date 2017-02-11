@@ -2,7 +2,7 @@
  * kpatch.c - Apply patches to a running kenel
  *
  * Copyright (c) 2014 Samuel Groß
- * Copyright (c) 2016 Siguza
+ * Copyright (c) 2016-2017 Siguza
  */
 
 #include <stdio.h>              // fprintf, stderr
@@ -13,7 +13,7 @@
 #include <sys/sysctl.h>         // sysctlbyname
 
 #include "arch.h"               // ADDR
-#include "libkern.h"            // get_kernel_base, find_bytes_kern, write_kernel
+#include "libkern.h"            // KERNEL_BASE_OR_GTFO, kernel_find, kernel_write
 
 int main(int argc, char **argv)
 {
@@ -28,24 +28,22 @@ int main(int argc, char **argv)
         fprintf(stderr, "Usage: %s new-uuid\n", argv[0]);
         return -1;
     }
+
+    KERNEL_BASE_OR_GTFO(kbase);
+
     if((ret = sysctlbyname("kern.uuid", uuid, &size, NULL, 0)) != KERN_SUCCESS)
     {
         fprintf(stderr, "[!] Failed to create UUID, sysctlbyname returned %i\n", ret);
         return -1;
     }
     fprintf(stderr, "[*] UUID: %s\n", uuid);
-    if((kbase = get_kernel_base()) == 0)
-    {
-        fprintf(stderr, "[!] Failed to locate kernel\n");
-        return -1;
-    }
-    if((uuid_addr = find_bytes_kern(kbase, kbase + 0x1000000, (unsigned char*)uuid, strlen(uuid))) == 0)
+    if((uuid_addr = kernel_find(kbase, 0x1000000, uuid, strlen(uuid))) == 0)
     {
         fprintf(stderr, "[!] Failed to find UUID in kernel memory\n");
         return -1;
     }
     fprintf(stderr, "[*] Found UUID at 0x" ADDR "\n", uuid_addr);
-    write_kernel(uuid_addr, (unsigned char*)argv[1], strlen(argv[1]) + 1);
+    kernel_write(uuid_addr, strlen(argv[1]) + 1, argv[1]);
     fprintf(stderr, "[*] Done, check \"sysctl kern.uuid\"\n");
 
     return 0;

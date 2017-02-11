@@ -2,7 +2,7 @@
  * kmem.c - Read kernel memory and dump it to the console
  *
  * Copyright (c) 2014 Samuel Groß
- * Copyright (c) 2016 Siguza
+ * Copyright (c) 2016-2017 Siguza
  */
 
 #include <errno.h>              // errno
@@ -16,7 +16,7 @@
 #include <mach/vm_types.h>      // vm_address_t, vm_size_t
 
 #include "arch.h"               // ADDR
-#include "libkern.h"            // read_kernel
+#include "libkern.h"            // KERNEL_TASK_OR_GTFO, kernel_read
 
 static void hexdump(unsigned char *data, size_t size)
 {
@@ -69,7 +69,6 @@ static void too_few_args(const char *self)
 int main(int argc, char **argv)
 {
     bool raw = false; // print raw bytes instead of a hexdump
-    task_t kernel_task;
     vm_address_t addr;
     vm_size_t size;
     char c, *end;
@@ -116,18 +115,14 @@ int main(int argc, char **argv)
         return -1;
     }
 
-    if(get_kernel_task(&kernel_task) != KERN_SUCCESS)
-    {
-        fprintf(stderr, "[!] Failed to get kernel task\n");
-        return -1;
-    }
+    KERNEL_TASK_OR_GTFO();
 
     if(!raw)
     {
         fprintf(stderr, "[*] Reading " SIZE " bytes from 0x" ADDR "\n", size, addr);
     }
     unsigned char* buf = malloc(size);
-    read_kernel(addr, size, buf);
+    kernel_read(addr, size, buf);
 
     if(raw)
     {

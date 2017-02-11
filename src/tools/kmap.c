@@ -2,7 +2,7 @@
  * kmap.c - Display a listing of the kernel memory mappings
  *
  * Copyright (c) 2014 Samuel Groß
- * Copyright (c) 2016 Siguza
+ * Copyright (c) 2016-2017 Siguza
  */
 
 #include <stdio.h>              // printf, fprintf, stderr
@@ -18,15 +18,16 @@
 #include "arch.h"               // ADDR
 #include "libkern.h"            // get_kernel_task
 
-int main()
+int main(void)
 {
     task_t kernel_task;
 
-    if(get_kernel_task(&kernel_task) != KERN_SUCCESS)
+    KERNEL_TASK_OR_GTFO(kernel_task);
+    /*if(get_kernel_task(&kernel_task) != KERN_SUCCESS)
     {
         fprintf(stderr, "[!] Failed to get kernel task\n");
         return -1;
-    }
+    }*/
 
     vm_region_submap_info_data_64_t info;
     vm_size_t size;
