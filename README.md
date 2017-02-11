@@ -24,12 +24,13 @@ The latest release of these tools is confirmed to work with:
 * p0sixspwn on 6.1.x
 * TaiG on 8.4
 * Pangu9 on 9.1
-* [qwertyoruiopz's jailbreakme](https://jbme.qwertyoruiop.com/) on 9.3.x
+* [qwertyoruiop's jailbreakme](https://jbme.qwertyoruiop.com/) on 9.3.x
+* Yalu102 (beta4 or later) on 10.0.1-10.2
 
 Jailbreaks that **DO NOT** seem to enable `tfp0`, and thus **DO NOT** work with kern-utils:
 
-* Pangu9 on 9.0.x
-* Pangu9 on 9.2-9.3.3
+* Pangu9 on 9.0.x (but can be enabled with [cl0ver](https://github.com/Siguza/cl0ver))
+* Pangu9 on 9.2-9.3.3 (but see qwertyoruiop's jailbreakme)
 
 If you have information about how the kernel task port can be obtained in these versions, please [open a ticket](https://github.com/Siguza/ios-kern-utils/issues/new) and tell me.
 
