@@ -1,10 +1,16 @@
 VERSION = 1.2.0
-ALL = $(patsubst src/tools/%.c,%,$(wildcard src/tools/*.c))
-DST = build
+BUILDDIR = build
+OBJDIR = obj
+SRCDIR = src
+ALL = $(patsubst $(SRCDIR)/tools/%.c,%,$(wildcard $(SRCDIR)/tools/*.c))
+LIB = kern
 PKG = pkg
 XZ = ios-kern-utils.tar.xz
 DEB = net.siguza.ios-kern-utils_$(VERSION)_iphoneos-arm.deb
-CFLAGS = -O3 -Wall -Isrc/lib src/lib/*.c -miphoneos-version-min=6.0
+IGCC_FLAGS = -std=gnu99 -O3 -Wall -I$(SRCDIR)/lib -miphoneos-version-min=6.0 $(CFLAGS)
+LD_FLAGS = -L.
+LD_LIBS = -l$(LIB) $(LDFLAGS)
+LIBTOOL_FLAGS ?= -static $(LIBS)
 
 ifndef IGCC
 	ifeq ($(shell uname -s),Darwin)
@@ -13,10 +19,10 @@ ifndef IGCC
 		else
 			IGCC = clang
 		endif
-		CFLAGS += -Wl,-dead_strip
+		LD_FLAGS += -Wl,-dead_strip
 	else
 		IGCC = ios-clang
-		CFLAGS += -Wl,--gc-sections
+		LD_FLAGS += -Wl,--gc-sections
 	endif
 endif
 ifndef IGCC_ARCH
@@ -31,6 +37,17 @@ ifndef STRIP
 		endif
 	else
 		STRIP := $(shell which ios-strip 2>/dev/null)
+	endif
+endif
+ifndef LIBTOOL
+	ifeq ($(shell uname -s),Darwin)
+		ifneq ($(HOSTTYPE),arm)
+			LIBTOOL = xcrun -sdk iphoneos libtool
+		else
+			LIBTOOL = libtool
+		endif
+	else
+		LIBTOOL = ios-libtool
 	endif
 endif
 ifndef SIGN
@@ -54,19 +71,30 @@ ifndef SIGN_FLAGS
 	endif
 endif
 
-.PHONY: all clean dist xz deb
+.PHONY: all lib dist xz deb clean
 
-all: $(addprefix $(DST)/, $(ALL))
+all: $(addprefix $(BUILDDIR)/, $(ALL))
 
-$(DST)/%: $(filter-out $(wildcard $(DST)), $(DST)) $(wildcard src/lib/**) src/tools/%.c | $(DST)
-	$(IGCC) $(IGCC_FLAGS) $(IGCC_ARCH) -o $@ $(CFLAGS) src/tools/$(@F).c
+$(BUILDDIR)/%: lib$(LIB).a $(SRCDIR)/tools/%.c | $(BUILDDIR)
+	$(IGCC) -o $@ $(IGCC_FLAGS) $(IGCC_ARCH) $(LD_FLAGS) $(LD_LIBS) $(SRCDIR)/tools/$(@F).c
 ifdef STRIP
 	$(STRIP) $@
 endif
 	$(SIGN) $(SIGN_FLAGS) $@
 
-$(DST):
-	mkdir -p $(DST)
+$(BUILDDIR):
+	mkdir -p $(BUILDDIR)
+
+lib: lib$(LIB).a
+
+lib$(LIB).a: $(patsubst $(SRCDIR)/lib/%.c,$(OBJDIR)/%.o,$(wildcard $(SRCDIR)/lib/*.c))
+	$(LIBTOOL) $(LIBTOOL_FLAGS) -o $@ $^
+
+$(OBJDIR)/%.o: $(SRCDIR)/lib/%.c | $(OBJDIR)
+	$(IGCC) -c -o $@ $(IGCC_FLAGS) $(IGCC_ARCH) $<
+
+$(OBJDIR):
+	mkdir -p $(OBJDIR)
 
 dist: xz deb
 
@@ -74,8 +102,8 @@ xz: $(XZ)
 
 deb: $(DEB)
 
-$(XZ): $(addprefix $(DST)/, $(ALL))
-	tar -cJf $(XZ) -C $(DST) $(ALL)
+$(XZ): $(addprefix $(BUILDDIR)/, $(ALL))
+	tar -cJf $(XZ) -C $(BUILDDIR) $(ALL)
 
 $(DEB): $(PKG)/control.tar.gz $(PKG)/data.tar.lzma $(PKG)/debian-binary
 	( cd "$(PKG)"; ar -cr "../$(DEB)" 'debian-binary' 'control.tar.gz' 'data.tar.lzma'; )
@@ -83,10 +111,10 @@ $(DEB): $(PKG)/control.tar.gz $(PKG)/data.tar.lzma $(PKG)/debian-binary
 $(PKG)/control.tar.gz: $(PKG)/control
 	tar -czf '$(PKG)/control.tar.gz' --exclude '.DS_Store' --exclude '._*' --exclude 'control.tar.gz' --include '$(PKG)' --include '$(PKG)/control' -s '%^$(PKG)%.%' $(PKG)
 
-$(PKG)/data.tar.lzma: $(addprefix $(DST)/, $(ALL)) | $(PKG) #misc/template.tar
-	tar -c --lzma -f '$(PKG)/data.tar.lzma' --exclude '.DS_Store' --exclude '._*' -s '%^build%./usr/bin%' @misc/template.tar $(DST)
+$(PKG)/data.tar.lzma: $(addprefix $(BUILDDIR)/, $(ALL)) | $(PKG) #misc/template.tar
+	tar -c --lzma -f '$(PKG)/data.tar.lzma' --exclude '.DS_Store' --exclude '._*' -s '%^build%./usr/bin%' @misc/template.tar $(BUILDDIR)
 
-$(PKG)/debian-binary: $(addprefix $(DST)/, $(ALL)) | $(PKG)
+$(PKG)/debian-binary: $(addprefix $(BUILDDIR)/, $(ALL)) | $(PKG)
 	echo '2.0' > "$(PKG)/debian-binary"
 
 $(PKG)/control: misc/control | $(PKG)
@@ -96,4 +124,4 @@ $(PKG):
 	mkdir -p $(PKG)
 
 clean:
-	rm -rf $(DST) $(PKG) $(XZ) $(DEB)
+	rm -rf $(BUILDDIR) $(OBJDIR) lib$(LIB).a $(PKG) $(XZ) $(DEB)

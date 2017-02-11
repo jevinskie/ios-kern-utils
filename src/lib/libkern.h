@@ -67,14 +67,14 @@ vm_address_t kernel_find(vm_address_t addr, vm_size_t len, void *buf, size_t siz
  *
  * To be embedded in a main() function.
  *
- * @param task is optional
+ * If parameters are given, the last one will be assigned the kernel task, all others are ignored.
  */
-#define KERNEL_TASK_OR_GTFO(task...) \
+#define KERNEL_TASK_OR_GTFO(args...) \
 do \
 { \
     task_t _kernel_task = MACH_PORT_NULL; \
     kern_return_t _ret = get_kernel_task(&_kernel_task); \
-    _kernel_task, ##task = _kernel_task; /* mad haxx */ \
+    _kernel_task, ##args = _kernel_task; /* mad haxx */ \
     if(_ret != KERN_SUCCESS || !MACH_PORT_VALID(_kernel_task)) \
     { \
         fprintf(stderr, "[!] Failed to get kernel task (%s, kernel_task = %x)\n", mach_error_string(_ret), _kernel_task); \

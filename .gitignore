@@ -1,4 +1,6 @@
 /build
+/obj
 /pkg
+/*.a
 /*.tar.xz
 /*.deb
