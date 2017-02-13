@@ -19,7 +19,7 @@
 #include "libkern.h"            // KERNEL_BASE_OR_GTFO, kernel_read
 #include "mach-o.h"             // CMD_ITERATE
 
-#define MAX_HEADER_SIZE 0x2000
+#define MAX_HEADER_SIZE 0x4000
 
 #define max(a, b) (a) > (b) ? (a) : (b)
 
@@ -68,17 +68,18 @@ int main(int argc, const char **argv)
         }
         else
         {
-            fprintf(stderr, "[!] Unrecognized option: %s\n", argv[aoff]);
+            fprintf(stderr, "[!] Unrecognized option: %s\n\n", argv[aoff]);
             print_usage(argv[0]);
             return -1;
         }
     }
-    if(aoff - argc >= 2)
+    if(argc - aoff > 1)
     {
-        fprintf(stderr, "[!] Too many arguments\n");
+        fprintf(stderr, "[!] Too many arguments\n\n");
+        print_usage(argv[0]);
         return -1;
     }
-    else if(aoff - argc == 2)
+    else if(argc - aoff == 1)
     {
         outfile = argv[aoff];
     }
@@ -119,8 +120,7 @@ int main(int argc, const char **argv)
     {
         switch(cmd->cmd)
         {
-            case LC_SEGMENT:
-            case LC_SEGMENT_64:
+            case MACH_LC_SEGMENT:
                 seg = (mach_seg_t*)cmd;
                 filesize = max(filesize, seg->fileoff + seg->filesize);
                 break;
@@ -140,8 +140,7 @@ int main(int argc, const char **argv)
     {
         switch(cmd->cmd)
         {
-            case LC_SEGMENT:
-            case LC_SEGMENT_64:
+            case MACH_LC_SEGMENT:
                 seg = (mach_seg_t*)cmd;
                 fprintf(stderr, "[+] Found segment %s\n", seg->segname);
                 kernel_read(seg->vmaddr, seg->filesize, binary + seg->fileoff);
