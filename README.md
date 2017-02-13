@@ -1,5 +1,7 @@
 # iOS Kernel Utilities
 
+Beware, chances are the device will panic and reboot.
+
 ### Download
 
 Just want the binaries?  
@@ -117,5 +119,3 @@ Maintained and updated for iOS 8 and later by [Siguza](https://github.com/Siguza
 
 * Test on Linux
 * Keep up with the original repo
-
-Beware, chances are the device will panic and reboot.
