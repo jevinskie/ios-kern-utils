@@ -273,7 +273,7 @@ vm_size_t kernel_write(vm_address_t addr, vm_size_t size, void* buf)
     {
         size = remainder > MAX_CHUNK_SIZE ? MAX_CHUNK_SIZE : remainder;
         ret = vm_write(kernel_task, addr, (vm_offset_t)&((char*)buf)[bytes_written], size);
-        if (ret != KERN_SUCCESS)
+        if(ret != KERN_SUCCESS)
         {
             break;
         }
