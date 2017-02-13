@@ -1,297 +1,370 @@
 /*
- * The MIT License (MIT)
+ * nvpatch.c - Patch kernel to unrestrict NVRAM variables
  *
  * Copyright (c) 2014 Samuel Groß
  * Copyright (c) 2016 Pupyshev Nikita
  * Copyright (c) 2017 Siguza
  *
- * Permission is hereby granted, free of charge, to any person obtaining a copy of
- * this software and associated documentation files (the "Software"), to deal in
- * the Software without restriction, including without limitation the rights to
- * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
- * the Software, and to permit persons to whom the Software is furnished to do so,
- * subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
- * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
- * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
- * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
 #include <errno.h>              // errno
-#include <stdbool.h>            // bool, true, false
 #include <stdio.h>              // fprintf, stderr
-#include <stdlib.h>             // malloc, free
-#include <string.h>             // memmem, strcmp, strerror
+#include <stdlib.h>             // free, malloc
+#include <string.h>             // memmem, strcmp, strnlen
 
-#include "arch.h"               // ADDR, mach_*
-#include "debug.h"              // slow, verbose
-#include "libkern.h"            // KERNEL_BASE_OR_GTFO, kernel_read, kernel_write
+#include "arch.h"               // ADDR, MACH_*, mach_*
+#include "debug.h"              // DEBUG, slow, verbose
+#include "libkern.h"            // KERNEL_BASE_OR_GTFO, kernel_read
+#include "mach-o.h"             // CMD_ITERATE
 
-#define OFVARS_SEG_NAME "__DATA"
-#define OFVARS_SECT_NAME "__data"
-#define CSTRING_SEG_NAME "__TEXT"
+#define MAX_HEADER_SIZE 0x4000
 
-#if __LP64__
-#define IMAGE_DATA_ALIGNMENT 8
-#else
-#define IMAGE_DATA_ALIGNMENT 4
-#endif
+#define STRING_SEG  "__TEXT"
+#define STRING_SEC  "__cstring"
+#define OFVAR_SEG   "__DATA"
+#define OFVAR_SEC   "__data"
 
-struct __attribute__((aligned(IMAGE_DATA_ALIGNMENT))) OFVariable {
-    char   *variableName;
-    uint32_t variableType;
-    uint32_t variablePerm;
-    int32_t variableOffset;
+enum
+{
+    kOFVarTypeBoolean = 1,
+    kOFVarTypeNumber,
+    kOFVarTypeString,
+    kOFVarTypeData,
 };
-typedef struct OFVariable OFVariable;
 
-bool validateOFVariables(OFVariable *ptr, unsigned int maxCount, vm_address_t cstringStart, vm_size_t cstringSize) {
-    uint32_t currType = 1;
-    int32_t currOfft = -1;
+enum
+{
+    kOFVarPermRootOnly = 0,
+    kOFVarPermUserRead,
+    kOFVarPermUserWrite,
+    kOFVarPermKernelOnly,
+};
 
-    uintptr_t variableName;
-    uint32_t variableType;
-    uint32_t variablePerm;
-    int32_t variableOffset;
-    for (unsigned int i = 0; i < maxCount; i++) {
-        variableName = (uintptr_t)ptr->variableName;
-        variableType = ptr->variableType;
-        variablePerm = ptr->variablePerm;
-        variableOffset = ptr->variableOffset;
+typedef struct
+{
+    vm_address_t name;
+    uint32_t type;
+    uint32_t perm;
+    int32_t offset;
+} OFVar;
 
-        if (!variableName) {
-            return i != 0;
-        }
-        if (variableName < cstringStart) {
-            return false;
-        }
-        if (variableName >= (cstringStart + cstringSize)) {
-            return false;
-        }
-        if (variableType > 4) {
-            return false; //1-4
-        }
-        if (variablePerm > 3) {
-            return false; //0-3
-        }
-        if (variableOffset <= currOfft) {
-            if (variableOffset != -1) {
-                return false;
-            }
-        } else {
-            currOfft = variableOffset;
-        }
-        currType = variableType;
-        ptr++;
+typedef struct
+{
+    vm_address_t addr;
+    vm_size_t len;
+    char *buf;
+} segment_t;
+
+#define MAX_TYPELEN 6
+static const char* type_name(uint32_t type)
+{
+    switch(type)
+    {
+        case kOFVarTypeBoolean: return "bool";
+        case kOFVarTypeNumber:  return "number";
+        case kOFVarTypeString:  return "string";
+        case kOFVarTypeData:    return "data";
     }
-    return false;
+    return "???";
 }
 
-void print_usage(const char *self)
+#define MAX_PERMLEN 5
+static const char* perm_name(uint32_t perm)
 {
-    fprintf(stderr, "Usage: %s [-h] [-v [-d]]\n"
+    switch(perm)
+    {
+        case kOFVarPermUserWrite:   return "rw/rw";
+        case kOFVarPermUserRead:    return "rw/r-";
+        case kOFVarPermRootOnly:    return "rw/--";
+        case kOFVarPermKernelOnly:  return "--/--";
+    }
+    return "???";
+}
+
+static void print_usage(const char *self)
+{
+    fprintf(stderr, "DISCLAIMER: YOU ARE MESSING WITH NVRAM AT YOUR OWN RISK!\n"
+                    "\n"
+                    "Usage:\n"
+                    "    %s [options]\n"
+                    "    %s [options] variable-name\n"
+                    "\n"
+                    "The first form lists all registered NVRAM variables with type and permission (as root/anyone).\n"
+                    "The second form patches the kernel to unrestrict the given variable.\n"
+                    "\n"
+                    "Options:\n"
                     "    -d  Debug mode (sleep between function calls, gives\n"
                     "        sshd time to deliver output before kernel panic)\n"
                     "    -h  Print this help\n"
                     "    -v  Verbose (debug output)\n"
-                    , self);
+                    , self, self);
 }
 
 int main(int argc, const char **argv)
 {
-    for(int i = 1; i < argc; ++i)
+    const char *target = NULL;
+
+    int aoff;
+    for(aoff = 1; aoff < argc; ++aoff)
     {
-        if(strcmp(argv[i], "-h") == 0)
+        if(argv[aoff][0] != '-')
+        {
+            break;
+        }
+        if(strcmp(argv[aoff], "-h") == 0)
         {
             print_usage(argv[0]);
             return 0;
         }
-        if(strcmp(argv[i], "-d") == 0)
+        if(strcmp(argv[aoff], "-d") == 0)
         {
             slow = true;
         }
-        else if(strcmp(argv[i], "-v") == 0)
+        else if(strcmp(argv[aoff], "-v") == 0)
         {
             verbose = true;
         }
         else
         {
-            fprintf(stderr, "[!] Unrecognized option: %s\n", argv[i]);
+            fprintf(stderr, "[!] Unrecognized option: %s\n\n", argv[aoff]);
             print_usage(argv[0]);
             return -1;
         }
     }
+    if(argc - aoff > 1)
+    {
+        fprintf(stderr, "[!] Too many arguments\n\n");
+        print_usage(argv[0]);
+        return -1;
+    }
+    else if(argc - aoff == 1)
+    {
+        target = argv[aoff];
+    }
 
     vm_address_t kbase;
     KERNEL_BASE_OR_GTFO(kbase);
-    fprintf(stderr, "[*] Found kernel base at address 0x" ADDR "\n", kbase);
 
-    mach_hdr_t header;
-    if (kernel_read(kbase, sizeof(header), &header) != sizeof(header)) {
-        fprintf(stderr, "[!] Kernel I/O failed\n");
+    mach_hdr_t *hdr = malloc(MAX_HEADER_SIZE);
+    if(hdr == NULL)
+    {
+        fprintf(stderr, "[!] Failed to allocate header buffer (%s)\n", strerror(errno));
+        return -1;
+    }
+    memset(hdr, 0, MAX_HEADER_SIZE);
+
+    DEBUG("Reading kernel header... ");
+    if(kernel_read(kbase, MAX_HEADER_SIZE, hdr) != MAX_HEADER_SIZE)
+    {
+        fprintf(stderr, "[!] Kernel I/O error\n");
         return -1;
     }
 
-    if (header.magic != MACH_HEADER_MAGIC) {
-        fprintf(stderr, "[!] Kernel Mach-O magic is invalid (%X)\n", header.magic);
+    segment_t
+    cstring =
+    {
+        .addr = 0,
+        .len = 0,
+        .buf = NULL,
+    },
+    data =
+    {
+        .addr = 0,
+        .len = 0,
+        .buf = NULL,
+    };
+    CMD_ITERATE(hdr, cmd)
+    {
+        switch(cmd->cmd)
+        {
+            case MACH_LC_SEGMENT:
+                {
+                    mach_seg_t *seg = (mach_seg_t*)cmd;
+                    mach_sec_t *sec = (mach_sec_t*)(seg + 1);
+                    for(size_t i = 0; i < seg->nsects; ++i)
+                    {
+                        if(strcmp(sec[i].segname, STRING_SEG) == 0 && strcmp(sec[i].sectname, STRING_SEC) == 0)
+                        {
+                            DEBUG("Found " STRING_SEG "." STRING_SEC " section at " ADDR, (vm_address_t)sec[i].addr);
+                            cstring.addr = sec[i].addr;
+                            cstring.len = sec[i].size;
+                            cstring.buf = malloc(cstring.len);
+                            if(cstring.buf == NULL)
+                            {
+                                fprintf(stderr, "[!] Failed to allocate section buffer (%s)\n", strerror(errno));
+                                return -1;
+                            }
+                            if(kernel_read(cstring.addr, cstring.len, cstring.buf) != cstring.len)
+                            {
+                                fprintf(stderr, "[!] Kernel I/O error\n");
+                                return -1;
+                            }
+                        }
+                        else if(strcmp(sec[i].segname, OFVAR_SEG) == 0 && strcmp(sec[i].sectname, OFVAR_SEC) == 0)
+                        {
+                            DEBUG("Found " OFVAR_SEG "." OFVAR_SEC " section at " ADDR, (vm_address_t)sec[i].addr);
+                            data.addr = sec[i].addr;
+                            data.len = sec[i].size;
+                            data.buf = malloc(data.len);
+                            if(data.buf == NULL)
+                            {
+                                fprintf(stderr, "[!] Failed to allocate section buffer (%s)\n", strerror(errno));
+                                return -1;
+                            }
+                            if(kernel_read(data.addr, data.len, data.buf) != data.len)
+                            {
+                                fprintf(stderr, "[!] Kernel I/O error\n");
+                                return -1;
+                            }
+                        }
+                    }
+                }
+                break;
+        }
+    }
+    if(cstring.buf == NULL)
+    {
+        fprintf(stderr, "[!] Failed to find " STRING_SEG "." STRING_SEC " section\n");
+        return -1;
+    }
+    if(data.buf == NULL)
+    {
+        fprintf(stderr, "[!] Failed to find " OFVAR_SEG "." OFVAR_SEC " section\n");
         return -1;
     }
 
-    uint32_t sizeofcmds = header.sizeofcmds;
-    uint32_t ncmds = header.ncmds;
-
-    void *lcBuf = malloc(sizeofcmds);
-    if (!lcBuf) {
-        fprintf(stderr, "[+] Memory allocation error (%s)\n", strerror(errno));
+    // This is the name of the first NVRAM variable
+    char first[] = "little-endian?";
+    char *str = memmem(cstring.buf, cstring.len, first, sizeof(first));
+    if(str == NULL)
+    {
+        fprintf(stderr, "[!] Failed to find string \"%s\"\n", first);
         return -1;
     }
-    if (kernel_read(kbase + sizeof(header), sizeofcmds, lcBuf) != sizeofcmds) {
-        fprintf(stderr, "[-] Kernel I/O failed\n");
+    vm_address_t str_addr = (str - cstring.buf) + cstring.addr;
+    DEBUG("Found string \"%s\" at " ADDR, first, str_addr);
+
+    // Now let's find a reference to it
+    OFVar *gOFVars = NULL;
+    for(vm_address_t *ptr = (vm_address_t*)data.buf, *end = (vm_address_t*)&data.buf[data.len]; ptr < end; ++ptr)
+    {
+        if(*ptr == str_addr)
+        {
+            gOFVars = (OFVar*)ptr;
+            break;
+        }
+    }
+    if(gOFVars == NULL)
+    {
+        fprintf(stderr, "[!] Failed to find gOFVariables\n");
         return -1;
     }
+    vm_address_t gOFAddr = ((char*)gOFVars - data.buf) + data.addr;
+    DEBUG("Found gOFVariables at " ADDR, gOFAddr);
 
-    vm_address_t ofvarsSectionAddress = 0;
-    vm_size_t ofvarsSectionSize = 0;
-    vm_address_t cstringSectionAddress = 0;
-    vm_size_t cstringSectionSize = 0;
-
-    mach_lc_t *lcPtr = lcBuf;
-    mach_lc_t *lcEndPtr = lcBuf + sizeofcmds;
-    for (uint32_t i = 0; i < ncmds; i++) {
-        if (lcPtr >= lcEndPtr) {
-            fprintf(stderr, "[!] Invalid size of load commands\n");
-            free(lcBuf);
+    // Sanity checks
+    size_t numvars = 0,
+           longest_name = 0;
+    for(OFVar *var = gOFVars; (char*)var < &data.buf[data.len]; ++var)
+    {
+        if(var->name == 0) // End marker
+        {
+            break;
+        }
+        if(var->name < cstring.addr || var->name >= cstring.addr + cstring.len)
+        {
+            fprintf(stderr, "[!] gOFVariables[%lu].name is out of bounds\n", numvars);
             return -1;
         }
-
-        if (lcPtr->cmd == MACH_LC_SEGMENT) {
-            mach_seg_t *cmd = (mach_seg_t*)lcPtr;
-            if (!strcmp(cmd->segname, OFVARS_SEG_NAME)) {
-                uint32_t nsects = cmd->nsects;
-                mach_sec_t *sec = (mach_sec_t*)&cmd[1];
-                for (uint32_t j = 0; j < nsects; j++) {
-                    if (!strcmp(sec->sectname, OFVARS_SECT_NAME)) {
-                        ofvarsSectionAddress = sec->addr;
-                        ofvarsSectionSize = sec->size;
-                        fprintf(stderr, "[+] Found " OFVARS_SEG_NAME "." OFVARS_SECT_NAME " section at address " ADDR "\n", ofvarsSectionAddress);
-                        break;
-                    }
-                    sec++;
-                }
-            } else if (!strcmp(cmd->segname, CSTRING_SEG_NAME)) {
-                uint32_t nsects = cmd->nsects;
-                mach_sec_t *sec = (mach_sec_t*)&cmd[1];
-                for (uint32_t j = 0; j < nsects; j++) {
-                    if (!strcmp(sec->sectname, "__cstring")) {
-                        cstringSectionAddress = sec->addr;
-                        cstringSectionSize = sec->size;
-                        fprintf(stderr, "[+] Found " CSTRING_SEG_NAME ".__cstring section at address " ADDR "\n", cstringSectionAddress);
-                        break;
-                    }
-                    sec++;
-                }
+        char *name = &cstring.buf[var->name - cstring.addr];
+        size_t maxlen = cstring.len - (name - cstring.buf),
+               namelen = strnlen(name, maxlen);
+        if(namelen == maxlen)
+        {
+            fprintf(stderr, "[!] gOFVariables[%lu].name exceeds __cstring size\n", numvars);
+            return -1;
+        }
+        for(size_t i = 0; i < namelen; ++i)
+        {
+            if(name[i] < 0x20 || name[i] >= 0x7f)
+            {
+                fprintf(stderr, "[!] gOFVariables[%lu].name contains non-printable character: 0x%02x\n", numvars, name[i]);
+                return -1;
             }
         }
-
-        lcPtr = (struct load_command *)((uintptr_t)lcPtr + lcPtr->cmdsize);
-    }
-    free(lcBuf);
-
-    if (!ofvarsSectionAddress) {
-        fprintf(stderr, "[!] " OFVARS_SEG_NAME "." OFVARS_SECT_NAME " segment not found\n");
-        return -1;
-    } else if (!cstringSectionAddress) {
-        fprintf(stderr, "[!] " CSTRING_SEG_NAME ".__cstring section not found\n");
-        return -1;
-    }
-
-    fprintf(stderr, "[*] Dumping " OFVARS_SEG_NAME "." OFVARS_SECT_NAME " section...\n");
-    void *ofvarsSectionBuf = malloc(ofvarsSectionSize);
-    if (!ofvarsSectionBuf) {
-        fprintf(stderr, "[!] Memory allocation error (%s)\n", strerror(errno));
-        return -1;
-    }
-
-    fprintf(stderr, "[*] Dumping " CSTRING_SEG_NAME ".__cstring section...\n");
-    void *cstringSectionBuf = malloc(cstringSectionSize);
-    if (!cstringSectionBuf) {
-        fprintf(stderr, "[!] Memory allocation error (%s)\n", strerror(errno));
-        free(ofvarsSectionBuf);
-        return -1;
-    }
-
-    if (kernel_read(ofvarsSectionAddress, ofvarsSectionSize, ofvarsSectionBuf) != ofvarsSectionSize) {
-        fprintf(stderr, "[!] Kernel I/O failed\n");
-        free(ofvarsSectionBuf);
-        free(cstringSectionBuf);
-        return -1;
-    }
-
-    if (kernel_read(cstringSectionAddress, cstringSectionSize, cstringSectionBuf) != cstringSectionSize) {
-        fprintf(stderr, "[!] Kernel I/O failed\n");
-        free(ofvarsSectionBuf);
-        free(cstringSectionBuf);
-        return -1;
-    }
-
-    void *aLittleEndian = memmem(cstringSectionBuf, cstringSectionSize, "little-endian?", 15);
-    if (!aLittleEndian) {
-        fprintf(stderr, "[!] \"little-endian?\" string not found\n");
-        free(ofvarsSectionBuf);
-        free(cstringSectionBuf);
-        return -1;
-    }
-    vm_address_t aLittleEndianAddress = aLittleEndian - cstringSectionBuf + cstringSectionAddress;
-
-    void *ofvarsStart = memmem(ofvarsSectionBuf, ofvarsSectionSize, &aLittleEndianAddress, sizeof(aLittleEndianAddress));
-    if (!ofvarsStart) {
-        fprintf(stderr, "[!] Unable to find \"little-endian?\" string xref\n");
-        free(ofvarsSectionBuf);
-        free(cstringSectionBuf);
-        return -1;
-    }
-    vm_offset_t ofvarsAddress = ofvarsSectionAddress + (ofvarsStart - ofvarsSectionBuf);
-    vm_size_t ofvarsMaxSize = ofvarsSectionAddress + ofvarsSectionSize - ofvarsAddress;
-
-    if (!validateOFVariables(ofvarsStart, ofvarsMaxSize / sizeof(OFVariable), cstringSectionAddress, cstringSectionSize)) {
-        fprintf(stderr, "[!] gOFVariables is corrupt\n");
-        free(ofvarsSectionBuf);
-        free(cstringSectionBuf);
-        return -1;
-    }
-
-    fprintf(stderr, "[+] Found valid gOFVariables at " ADDR "\n", ofvarsAddress);
-
-    OFVariable *var = (OFVariable*)ofvarsStart;
-    const char *name;
-    while (var->variableName != NULL) {
-        if (var->variablePerm == 3) {
-            name = cstringSectionBuf + ((uintptr_t)var->variableName - cstringSectionAddress);
-            var->variablePerm = 0;
-            fprintf(stderr, "[*] Edited permissions for %s\n", name);
+        longest_name = namelen > longest_name ? namelen : longest_name;
+        switch(var->type)
+        {
+            case kOFVarTypeBoolean:
+            case kOFVarTypeNumber:
+            case kOFVarTypeString:
+            case kOFVarTypeData:
+                break;
+            default:
+                fprintf(stderr, "[!] gOFVariables[%lu] has unknown type: 0x%x\n", numvars, var->type);
+                return -1;
         }
-        var++;
+        switch(var->perm)
+        {
+            case kOFVarPermRootOnly:
+            case kOFVarPermUserRead:
+            case kOFVarPermUserWrite:
+            case kOFVarPermKernelOnly:
+                break;
+            default:
+                fprintf(stderr, "[!] gOFVariables[%lu] has unknown permissions: 0x%x\n", numvars, var->perm);
+                return -1;
+        }
+        ++numvars;
     }
-    vm_size_t ofvarsSize = (void *)++var - ofvarsStart;
-
-    fprintf(stderr, "[*] Applying kernel patch...\n");
-    if (kernel_write(ofvarsAddress, ofvarsSize, ofvarsStart) != ofvarsSize) {
-        fprintf(stderr, "[!] Kernel I/O failed\n");
-        free(ofvarsSectionBuf);
-        free(cstringSectionBuf);
+    if(numvars < 1)
+    {
+        fprintf(stderr, "[!] gOFVariables contains zero entries\n");
         return -1;
     }
 
-    fprintf(stderr, "[*] Done\n");
+    if(target == NULL) // Print list
+    {
+        DEBUG("gOFVariables:");
 
-    free(ofvarsSectionBuf);
-    free(cstringSectionBuf);
+        for(size_t i = 0; i < numvars; ++i)
+        {
+            char *name = &cstring.buf[gOFVars[i].name - cstring.addr];
+            printf("%-*s %-*s %-*s\n", (int)longest_name, name, MAX_TYPELEN, type_name(gOFVars[i].type), MAX_PERMLEN, perm_name(gOFVars[i].perm));
+        }
+    }
+    else // Patch target
+    {
+        for(size_t i = 0; i < numvars; ++i)
+        {
+            char *name = &cstring.buf[gOFVars[i].name - cstring.addr];
+            if(strcmp(name, target) == 0)
+            {
+                if(gOFVars[i].perm != kOFVarPermKernelOnly)
+                {
+                    fprintf(stderr, "[!] Variable \"%s\" is already writable for %s\n", target, gOFVars[i].perm == kOFVarPermUserWrite ? "everyone" : "root");
+                    return -1;
+                }
+                vm_size_t off = ((char*)&gOFVars[i].perm) - data.buf;
+                uint32_t newperm = kOFVarPermRootOnly;
+                if(kernel_write(data.addr + off, sizeof(newperm), &newperm) != sizeof(newperm))
+                {
+                    fprintf(stderr, "[!] Kernel I/O error\n");
+                    return -1;
+                }
+                goto patched;
+            }
+        }
+        fprintf(stderr, "[!] Failed to find variable \"%s\"\n", target);
+        return -1;
+
+        patched:;
+        fprintf(stderr, "[*] Successfully patched permissions for variable \"%s\"\n", target);
+    }
+
+    free(cstring.buf);
+    free(data.buf);
+    free(hdr);
 
     return 0;
 }

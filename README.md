@@ -112,7 +112,7 @@ For `make` you may also specify the following environment variables:
 [MIT](https://github.com/Siguza/cl0ver/blob/master/LICENSE).
 
 [Original project](https://github.com/saelo/ios-kern-utils) by [Samuel Groß](https://github.com/saelo).  
-`nvpatch` (originally [`nvram_patcher`](https://github.com/realnp/nvram_patcher)) by [Pupyshev Nikita](https://github.com/realnp).  
+`nvpatch` is largely based on [`nvram_patcher`](https://github.com/realnp/nvram_patcher) by [Pupyshev Nikita](https://github.com/realnp).  
 Maintained and updated for iOS 8 and later by [Siguza](https://github.com/Siguza).  
 
 ### TODO
