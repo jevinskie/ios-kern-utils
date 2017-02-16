@@ -4,7 +4,6 @@
  * Copyright (c) 2014 Samuel Groß
  * Copyright (c) 2016 Pupyshev Nikita
  * Copyright (c) 2017 Siguza
- *
  */
 
 #include <errno.h>              // errno

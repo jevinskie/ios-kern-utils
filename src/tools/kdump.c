@@ -23,7 +23,7 @@
 
 #define max(a, b) (a) > (b) ? (a) : (b)
 
-void print_usage(const char *self)
+static void print_usage(const char *self)
 {
     fprintf(stderr, "Usage: %s [-h] [-v [-d]] [kernel.bin]\n"
                     "    -d  Debug mode (sleep between function calls, gives\n"
@@ -35,7 +35,6 @@ void print_usage(const char *self)
 
 int main(int argc, const char **argv)
 {
-    //task_t kernel_task;
     vm_address_t kbase;
     FILE* f;
     size_t filesize = 0;
