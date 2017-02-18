@@ -166,8 +166,8 @@ static uint8_t is_kernel_header(mach_hdr_t *hdr)
 // attempt to access it. One source this "more information" could be obtained
 // from are other memory regions.
 // A great many memory region outright panic the device when accessed. However,
-// all those with share_mode == SM_PRIVATE never do that, i.e. can always be
-// read from.
+// all those with share_mode == SM_PRIVATE && !is_submap never do that,
+// i.e. can always be read from.
 // My idea from there on is to iterate over all of these memory regions on a
 // pointer-sized granularity, look for any value that falls within the base
 // region, and take the lowest of those. From there on, I round down to the next
@@ -251,7 +251,7 @@ vm_address_t get_kernel_base(void)
                 break;
             }
 
-            if(info.share_mode == SM_PRIVATE)
+            if(info.share_mode == SM_PRIVATE && !info.is_submap)
             {
                 DEBUG("Found private region " ADDR "-" ADDR ", dumping and scanning it...", addr, addr + size);
                 vm_address_t *buf = malloc(size);
@@ -268,7 +268,7 @@ vm_address_t get_kernel_base(void)
                 }
                 for(vm_address_t *p = buf, *last = (vm_address_t*)&((char*)p)[size]; p < last; ++p)
                 {
-                    if(*p >= segstart && *p < segend)
+                    if(*p >= segstart && *p < segend && *p < ptr)
                     {
                         ptr = *p;
                         DEBUG("Candidate: " ADDR, ptr);
