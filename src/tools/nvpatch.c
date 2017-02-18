@@ -342,8 +342,8 @@ int main(int argc, const char **argv)
             {
                 if(gOFVars[i].perm != kOFVarPermKernelOnly)
                 {
-                    fprintf(stderr, "[!] Variable \"%s\" is already writable for %s\n", target, gOFVars[i].perm == kOFVarPermUserWrite ? "everyone" : "root");
-                    return -1;
+                    fprintf(stderr, "[*] Variable \"%s\" is already writable for %s\n", target, gOFVars[i].perm == kOFVarPermUserWrite ? "everyone" : "root");
+                    goto done;
                 }
                 vm_size_t off = ((char*)&gOFVars[i].perm) - data.buf;
                 uint32_t newperm = kOFVarPermRootOnly;
@@ -352,14 +352,28 @@ int main(int argc, const char **argv)
                     fprintf(stderr, "[!] Kernel I/O error\n");
                     return -1;
                 }
-                goto patched;
+                fprintf(stderr, "[*] Successfully patched permissions for variable \"%s\"\n", target);
+                goto done;
             }
         }
         fprintf(stderr, "[!] Failed to find variable \"%s\"\n", target);
+
+        const char *assign = strchr(target, '=');
+        if(assign != NULL)
+        {
+            size_t len = assign - target;
+            fprintf(stderr, "[!] WARNING!\n"
+                            "[!] Your variable name contains a '=' character, which is almost certainly wrong.\n"
+                            "[!] If you meant to patch a variable and assign it a value, run the following:\n"
+                            "\n"
+                            "%s %.*s\n"
+                            "nvram %s\n"
+                            "\n"
+                            , argv[0], (int)len, target, target);
+        }
         return -1;
 
-        patched:;
-        fprintf(stderr, "[*] Successfully patched permissions for variable \"%s\"\n", target);
+        done:;
     }
 
     free(cstring.buf);
