@@ -91,6 +91,79 @@ kern_return_t get_kernel_task(task_t *task)
     return KERN_SUCCESS;
 }
 
+region_t* get_base_region(void)
+{
+    static char initialized = 0;
+    static region_t region = // allows us to return a pointer
+    {
+        .addr = 0,
+        .size = 0,
+    };
+    if(!initialized)
+    {
+        DEBUG("Getting base region address...");
+        task_t kernel_task;
+        if(get_kernel_task(&kernel_task) != KERN_SUCCESS)
+        {
+            return NULL;
+        }
+
+        vm_region_submap_info_data_64_t info;
+        vm_size_t size;
+        mach_msg_type_number_t info_count = VM_REGION_SUBMAP_INFO_COUNT_64;
+        unsigned int depth = 0;
+
+        DEBUG("Looping over kernel memory regions...");
+        for(vm_address_t addr = 0; 1; addr += size)
+        {
+            DEBUG("Searching for next region at " ADDR "...", addr);
+            depth = 0xff;
+            if(vm_region_recurse_64(kernel_task, &addr, &size, &depth, (vm_region_info_t)&info, &info_count) != KERN_SUCCESS)
+            {
+                break;
+            }
+            DEBUG("Found region " ADDR "-" ADDR "with %c%c%c", addr, addr + size, (info.protection) & VM_PROT_READ ? 'r' : '-', (info.protection) & VM_PROT_WRITE ? 'w' : '-', (info.protection) & VM_PROT_EXECUTE ? 'x' : '-');
+
+            if
+            (
+                (info.protection & (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE)) == 0 &&
+                size >       1024*1024*1024 &&
+#ifdef __LP64__
+                size <= 16ULL * 1024*1024*1024 && // this is always true for 32-bit
+#endif
+                info.share_mode == SM_EMPTY
+            )
+            {
+                if(region.addr == 0 && region.size == 0)
+                {
+                    DEBUG("Found a matching memory region.");
+                    region.addr = addr;
+                    region.size = size;
+                }
+                else
+                {
+                    DEBUG("Found more than one matching memory region, returning NULL.");
+                    return NULL;
+                }
+            }
+        }
+
+        if(region.addr == 0)
+        {
+            DEBUG("Found no matching region, returning NULL.");
+            return NULL;
+        }
+        if(region.addr + region.size < region.addr)
+        {
+            DEBUG("Base region has overflowing size, returning NULL.");
+            return NULL;
+        }
+        DEBUG("Base region is at " ADDR "-" ADDR ".", region.addr, region.addr + region.size);
+        initialized = 1;
+    }
+    return &region;
+}
+
 // 0 = true
 // 1 = false
 // 2 = fatal
@@ -180,65 +253,24 @@ vm_address_t get_kernel_base(void)
     if(!initialized)
     {
         DEBUG("Getting kernel base address...");
+        region_t *reg = get_base_region();
+        if(reg == NULL)
+        {
+            return 0;
+        }
+        vm_address_t regstart = reg->addr,
+                     regend   = reg->addr + reg->size;
+
         task_t kernel_task;
         if(get_kernel_task(&kernel_task) != KERN_SUCCESS)
         {
             return 0;
         }
 
-        vm_address_t segstart = 0,
-                     segend = 0;
         vm_region_submap_info_data_64_t info;
         vm_size_t size;
         mach_msg_type_number_t info_count = VM_REGION_SUBMAP_INFO_COUNT_64;
         unsigned int depth = 0;
-
-        DEBUG("Looping over kernel memory regions...");
-        for(vm_address_t addr = 0; 1; addr += size)
-        {
-            DEBUG("Searching for next region at " ADDR "...", addr);
-            depth = 0xff;
-            if(vm_region_recurse_64(kernel_task, &addr, &size, &depth, (vm_region_info_t)&info, &info_count) != KERN_SUCCESS)
-            {
-                break;
-            }
-            DEBUG("Found region " ADDR "-" ADDR "with %c%c%c", addr, addr + size, (info.protection) & VM_PROT_READ ? 'r' : '-', (info.protection) & VM_PROT_WRITE ? 'w' : '-', (info.protection) & VM_PROT_EXECUTE ? 'x' : '-');
-
-            if
-            (
-                (info.protection & (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE)) == 0 &&
-                size >       1024*1024*1024 &&
-#ifdef __LP64__
-                size <= 16ULL * 1024*1024*1024 && // this is always true for 32-bit
-#endif
-                info.share_mode == SM_EMPTY
-            )
-            {
-                if(segstart == 0 && segend == 0)
-                {
-                    DEBUG("Found a matching memory region.");
-                    segstart = addr;
-                    segend = addr + size;
-                }
-                else
-                {
-                    DEBUG("Found more than one matching memory region, returning 0.");
-                    return 0;
-                }
-            }
-        }
-
-        if(segstart == 0)
-        {
-            DEBUG("Found no matching region, returning 0.");
-            return 0;
-        }
-        if(segend < segstart)
-        {
-            DEBUG("Matching region has overflowing size, returning 0.");
-            return 0;
-        }
-        DEBUG("Base region is at " ADDR "-" ADDR ".", segstart, segend);
 
         DEBUG("Looking for a pointer to it...");
         vm_address_t ptr = ~0;
@@ -268,7 +300,7 @@ vm_address_t get_kernel_base(void)
                 }
                 for(vm_address_t *p = buf, *last = (vm_address_t*)&((char*)p)[size]; p < last; ++p)
                 {
-                    if(*p >= segstart && *p < segend && *p < ptr)
+                    if(*p >= regstart && *p < regend && *p < ptr)
                     {
                         ptr = *p;
                         DEBUG("Candidate: " ADDR, ptr);
@@ -278,14 +310,14 @@ vm_address_t get_kernel_base(void)
             }
         }
 
-        if(ptr < segstart || ptr >= segend)
+        if(ptr < regstart || ptr >= regend)
         {
             DEBUG("Found no valid pointer to base region, returning 0.");
             return 0;
         }
         DEBUG("Lowest pointer to base region: " ADDR, ptr);
 
-        for(vm_address_t addr = (ptr >> 20) << 20; addr >= segstart; addr -= 0x100000)
+        for(vm_address_t addr = (ptr >> 20) << 20; addr >= regstart; addr -= 0x100000)
         {
             mach_hdr_t hdr;
             vm_address_t haddr;
