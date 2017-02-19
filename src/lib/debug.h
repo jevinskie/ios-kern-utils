@@ -22,7 +22,7 @@ do \
     } \
     if(slow) \
     { \
-        usleep(1000); \
+        usleep(100); \
     } \
 } while(0)
 
