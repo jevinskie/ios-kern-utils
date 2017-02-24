@@ -5,6 +5,7 @@
  * Copyright (c) 2016-2017 Siguza
  */
 
+#include <limits.h>             // UINT_MAX
 #include <stdbool.h>            // bool, true, false
 #include <stdio.h>              // printf, fprintf, stderr
 
@@ -92,7 +93,6 @@ int main(int argc, const char **argv)
     }
 
     task_t kernel_task;
-
     KERNEL_TASK_OR_GTFO(kernel_task);
 
     vm_region_submap_info_data_64_t info;
@@ -106,7 +106,7 @@ int main(int argc, const char **argv)
     for(vm_address_t addr = 0; 1; addr += size)
     {
         // get next memory region
-        depth = 255;
+        depth = UINT_MAX;
         if(vm_region_recurse_64(kernel_task, &addr, &size, &depth, (vm_region_info_t)&info, &info_count) != KERN_SUCCESS)
         {
             break;
@@ -140,7 +140,7 @@ int main(int argc, const char **argv)
                    , addr, addr+size, displaysize, scale
                    , (info.protection     & ~(VM_PROT_ALL)) ? '+' : '-', curR, curW, curX
                    , (info.max_protection & ~(VM_PROT_ALL)) ? '+' : '-', maxR, maxW, maxX
-                   , info.is_submap ? "map" : "mem", share_mode(info.share_mode), inheritance(info.inheritance), info.offset
+                   , info.is_submap ? "map" : depth > 0 ? "sub" : "mem", share_mode(info.share_mode), inheritance(info.inheritance), info.offset
                    , info.behavior, info.pages_reusable, info.user_wired_count, info.external_pager, info.shadow_depth // these should all be 0
                    , info.user_tag, info.object_id, info.ref_count
                    , info.pages_swapped_out, info.pages_shared_now_private, info.pages_resident, info.pages_dirtied

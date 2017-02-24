@@ -17,12 +17,6 @@
 #include <mach/port.h>          // MACH_PORT_NULL, MACH_PORT_VALID
 #include <mach/vm_types.h>      // vm_address_t, vm_size_t
 
-typedef struct
-{
-    vm_address_t addr;
-    vm_size_t size;
-} region_t;
-
 /*
  * Functions and macros to interact with the kernel address space.
  *
@@ -39,14 +33,6 @@ typedef struct
  */
 
 kern_return_t get_kernel_task(task_t *task);
-
-/*
- * Return the address of the memory region containing the kernel.
- *
- * This function should be safe.
- */
-
-region_t* get_base_region(void);
 
 /*
  * Return the base address of the running kernel.

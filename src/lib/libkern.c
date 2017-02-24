@@ -5,8 +5,10 @@
  * Copyright (c) 2016-2017 Siguza
  */
 
-#include <stdlib.h>             // free, malloc
+#include <limits.h>             // UINT_MAX
+#include <stdlib.h>             // free, malloc, random, srandom
 #include <string.h>             // memmem
+#include <time.h>               // time
 
 #include <mach/host_priv.h>     // host_get_special_port
 #include <mach/kern_return.h>   // KERN_SUCCESS, kern_return_t
@@ -14,13 +16,25 @@
 #include <mach/message.h>       // mach_msg_type_number_t
 #include <mach/mach_error.h>    // mach_error_string
 #include <mach/mach_traps.h>    // task_for_pid
-#include <mach/mach_types.h>    // task_t
+#include <mach/mach_types.h>    // task_t, mach_port_t
 #include <mach/port.h>          // MACH_PORT_NULL, MACH_PORT_VALID
-#include <mach/vm_prot.h>       // VM_PROT_READ, VM_PROT_WRITE, VM_PROT_EXECUTE
+#include <mach/vm_prot.h>       // VM_PROT_*
 #include <mach/vm_region.h>     // SM_*, VM_REGION_SUBMAP_INFO_COUNT_64, vm_region_info_t, vm_region_submap_info_data_64_t
 #include <mach/vm_map.h>        // vm_read_overwrite, vm_region_recurse_64, vm_write
 #include <mach/vm_types.h>      // vm_address_t, vm_size_t
 #include <mach-o/loader.h>      // MH_EXECUTE
+
+#include <CoreFoundation/CoreFoundation.h> // CF*
+// IOKit hacks
+extern const mach_port_t kIOMasterPortDefault;
+typedef mach_port_t io_object_t;
+typedef io_object_t io_registry_entry_t;
+typedef UInt32 IOOptionBits;
+io_registry_entry_t IORegistryGetRootEntry(mach_port_t);
+CFTypeRef IORegistryEntryCreateCFProperty(io_registry_entry_t, CFStringRef, CFAllocatorRef, IOOptionBits);
+kern_return_t IOObjectRelease(io_object_t);
+// Kernel stuff
+#define VM_KERN_MEMORY_ZONE		12
 
 #include "arch.h"               // IMAGE_OFFSET, MACH_TYPE, MACH_HEADER_MAGIC, mach_hdr_t
 #include "debug.h"              // DEBUG
@@ -62,7 +76,7 @@ do \
 kern_return_t get_kernel_task(task_t *task)
 {
     static task_t kernel_task = MACH_PORT_NULL;
-    static char initialized = 0;
+    static bool initialized = false;
     if(!initialized)
     {
         DEBUG("Getting kernel task...");
@@ -84,16 +98,82 @@ kern_return_t get_kernel_task(task_t *task)
             return ret;
         }
         DEBUG("Success, caching returned port.");
-        initialized = 1;
+        initialized = true;
         DEBUG("kernel_task = 0x%08x", kernel_task);
     }
     *task = kernel_task;
     return KERN_SUCCESS;
 }
 
+// Kernel Base: This is a long story.
+//
+// Obtaining the kernel slide/base address is non-trivial, even with access to
+// the kernel task port. Using the vm_region_* APIs, however, one can iterate
+// over its memory regions, which provides a starting point. Additionally, there
+// is a special region (I call it the "base region"), within which the kernel is
+// located.
+//
+//
+// Some history:
+//
+// In Saelo's original code (working up to and including iOS 7), the base region
+// would be uniquely identified by being larger than 1 GB. The kernel had a
+// simple offset from the region's base address of 0x1000 bytes on 32-bit, and
+// 0x2000 bytes on 64-bit.
+//
+// With iOS 8, the property of being larger than 1GB was no longer unique.
+// Additionally, one had to check for ---/--- access permissions, which would
+// again uniquely identify the base region. The kernel offset from its base
+// address remained the same.
+//
+// With iOS 9, the kernel's offset from the region's base address was doubled
+// for most (but seemingly not all) devices. I simply checked both 0x1000 and
+// 0x2000 for 32-bit and 0x2000 and 0x4000 for 64-bit.
+//
+// Somewhere between iOS 9.0 and 9.1, the kernel started not having a fixed
+// offset from the region's base address anymore. In addition to the fixed
+// offset, it could have a multiple of 0x100000 added to its address, seemingly
+// uncorrelated to the region's base address, as if it had an additional KASLR
+// slide applied within the region. Also, the kernel's offset from the region's
+// base address could be much larger than the kernel itself.
+// I worked around this by first locating the base region, checking for the
+// Mach-O magic, and simply adding 0x100000 to the address until I found it.
+//
+// With iOS 10, the base address identification was no longer sufficient, as
+// another null mapping of 64GB size had popped up. So in addition to the other
+// two, I added the criterium of a size smaller than 16GB.
+// In addition to that, the part of the base region between its base address and
+// the kernel base does no longer have to be mapped (that is, it's still part of
+// the memory region, but trying to access it will cause a panic). This
+// completely broke my workaround for iOS 9, and it's also the reason why both
+// nonceEnabler and nvram_patcher don't work reliably. It's still possible to
+// get it to work through luck, but that chance is pretty small.
+//
+//
+// Current observations and ideas:
+//
+// The base region still exists, still contains the kernel, and is still
+// uniquely identifiable, but more information is required before one should
+// attempt to access it. One source this "more information" could be obtained
+// from are other memory regions.
+// A great many memory region outright panic the device when accessed. However,
+// all those with share_mode == SM_PRIVATE && !is_submap never do that,
+// i.e. can always be read from.
+// My idea from there on is to iterate over all of these memory regions on a
+// pointer-sized granularity, look for any value that falls within the base
+// region, and take the lowest of those. From there on, I round down to the next
+// lower multiple of 0x100000 and start looking for the header.
+
+#if 0
+typedef struct
+{
+    vm_address_t addr;
+    vm_size_t size;
+} region_t;
+
 region_t* get_base_region(void)
 {
-    static char initialized = 0;
+    static bool initialized = false;
     static region_t region = // allows us to return a pointer
     {
         .addr = 0,
@@ -159,9 +239,103 @@ region_t* get_base_region(void)
             return NULL;
         }
         DEBUG("Base region is at " ADDR "-" ADDR ".", region.addr, region.addr + region.size);
-        initialized = 1;
+        initialized = true;
     }
     return &region;
+}
+
+typedef bool (*foreach_callback_t) (vm_address_t);
+
+vm_address_t foreach_ptr_to_base_region(foreach_callback_t cb)
+{
+    region_t *reg = get_base_region();
+    if(reg == NULL)
+    {
+        return 0;
+    }
+    vm_address_t regstart = reg->addr,
+                 regend   = reg->addr + reg->size;
+
+    task_t kernel_task;
+    if(get_kernel_task(&kernel_task) != KERN_SUCCESS)
+    {
+        return 0;
+    }
+
+    vm_region_submap_info_data_64_t info;
+    vm_size_t size;
+    mach_msg_type_number_t info_count = VM_REGION_SUBMAP_INFO_COUNT_64;
+    unsigned int depth = 0;
+
+    DEBUG("Looking for a pointer to base region...");
+    for(vm_address_t addr = 0; 1; addr += size)
+    {
+        DEBUG("Searching for next region at " ADDR "...", addr);
+        depth = 0xff;
+        if(vm_region_recurse_64(kernel_task, &addr, &size, &depth, (vm_region_info_t)&info, &info_count) != KERN_SUCCESS)
+        {
+            break;
+        }
+
+        if(info.share_mode == SM_PRIVATE && !info.is_submap)
+        {
+            DEBUG("Found private region " ADDR "-" ADDR ", dumping and scanning it...", addr, addr + size);
+            char *buf = malloc(size);
+            if(buf == NULL)
+            {
+                DEBUG("Memory allocation error, returning 0.");
+                return 0;
+            }
+            if(kernel_read(addr, size, buf) != size)
+            {
+                DEBUG("Kernel I/O error, returning 0.");
+                free(buf);
+                return 0;
+            }
+            DEBUG("Looking for stack frames...");
+            for(vm_size_t off = 0; off < (size - sizeof(void*)); off += sizeof(void*))
+            {
+                vm_size_t cur = off;
+                size_t len = 0;
+                vm_address_t lowest = ~0;
+                do
+                {
+                    vm_address_t fp = ((vm_address_t*)&buf[cur])[0],
+                                 lr = ((vm_address_t*)&buf[cur])[1];
+                    if(lr > regstart && lr < regend) // DEBUG-XXX
+                    {
+                        DEBUG(ADDR " fp: " ADDR " lr: " ADDR, addr + cur, fp, lr);
+                    }
+                    if
+                    (
+                        fp > addr + cur + sizeof(void*) && fp < addr + size - sizeof(void*) &&
+                        lr > regstart && lr < regend // absolute < and > are intentional
+                    )
+                    {
+                        DEBUG(ADDR " fp: " ADDR " lr: " ADDR, addr + cur, fp, lr);
+                        if(lr < lowest)
+                        {
+                            lowest = lr;
+                        }
+                        cur = fp - addr;
+                        ++len;
+                    }
+                    else
+                    {
+                        if(len >= 5 && cb(lowest)) // threshold of 5 frames
+                        {
+                            free(buf);
+                            return lowest;
+                        }
+                        break;
+                    }
+                } while(true);
+            }
+            free(buf);
+        }
+    }
+    DEBUG("Callback never returned true, returning 0.");
+    return 0;
 }
 
 // 0 = true
@@ -187,136 +361,31 @@ static uint8_t is_kernel_header(mach_hdr_t *hdr)
     return 0;
 }
 
-// Kernel Base: This is a long story.
-//
-// Obtaining the kernel slide/base address is non-trivial, even with access to
-// the kernel task port. Using the vm_region_* APIs, however, one can iterate
-// over its memory regions, which provides a starting point. Additionally, there
-// is a special region (I call it the "base region"), within which the kernel is
-// located.
-//
-//
-// Some history:
-//
-// In Saelo's original code (working up to and including iOS 7), the base region
-// would be uniquely identified by being larger than 1 GB. The kernel had a
-// simple offset from the region's base address of 0x1000 bytes on 32-bit, and
-// 0x2000 bytes on 64-bit.
-//
-// With iOS 8, the property of being larger than 1GB was no longer unique.
-// Additionally, one had to check for ---/--- access permissions, which would
-// again uniquely identify the base region. The kernel offset from its base
-// address remained the same.
-//
-// With iOS 9, the kernel's offset from the region's base address was doubled
-// for most (but seemingly not all) devices. I simply checked both 0x1000 and
-// 0x2000 for 32-bit and 0x2000 and 0x4000 for 64-bit.
-//
-// Somewhere between iOS 9.0 and 9.1, the kernel started not having a fixed
-// offset from the region's base address anymore. In addition to the fixed
-// offset, it could have a multiple of 0x100000 added to its address, seemingly
-// uncorrelated to the region's base address, as if it had an additional KASLR
-// slide applied within the region. Also, the kernel's offset from the region's
-// base address could be much larger than the kernel itself.
-// I worked around this by first locating the base region, checking for the
-// Mach-O magic, and simply adding 0x100000 to the address until I found it.
-//
-// With iOS 10, the base address identification was no longer sufficient, as
-// another null mapping of 64GB size had popped up. So in addition to the other
-// two, I added the criterium of a size smaller than 16GB.
-// In addition to that, the part of the base region between its base address and
-// the kernel base does no longer have to be mapped (that is, it's still part of
-// the memory region, but trying to access it will cause a panic). This
-// completely broke my workaround for iOS 9, and it's also the reason why both
-// nonceEnabler and nvram_patcher don't work reliably. It's still possible to
-// get it to work through luck, but that chance is pretty small.
-//
-//
-// Current observations and ideas:
-//
-// The base region still exists, still contains the kernel, and is still
-// uniquely identifiable, but more information is required before one should
-// attempt to access it. One source this "more information" could be obtained
-// from are other memory regions.
-// A great many memory region outright panic the device when accessed. However,
-// all those with share_mode == SM_PRIVATE && !is_submap never do that,
-// i.e. can always be read from.
-// My idea from there on is to iterate over all of these memory regions on a
-// pointer-sized granularity, look for any value that falls within the base
-// region, and take the lowest of those. From there on, I round down to the next
-// lower multiple of 0x100000 and start looking for the header.
+static bool get_kernel_base_cb(vm_address_t addr)
+{
+    DEBUG("Candidate: " ADDR, addr);
+    return true; // accept first candidate
+}
 
 vm_address_t get_kernel_base(void)
 {
     static vm_address_t kbase;
-    static char initialized = 0;
+    static bool initialized = false;
     if(!initialized)
     {
         DEBUG("Getting kernel base address...");
-        region_t *reg = get_base_region();
-        if(reg == NULL)
-        {
-            return 0;
-        }
-        vm_address_t regstart = reg->addr,
-                     regend   = reg->addr + reg->size;
 
-        task_t kernel_task;
-        if(get_kernel_task(&kernel_task) != KERN_SUCCESS)
+        vm_address_t ptr = foreach_ptr_to_base_region(&get_kernel_base_cb);
+        if(ptr == 0)
         {
             return 0;
         }
 
-        vm_region_submap_info_data_64_t info;
-        vm_size_t size;
-        mach_msg_type_number_t info_count = VM_REGION_SUBMAP_INFO_COUNT_64;
-        unsigned int depth = 0;
+        // Can omit NULL check here because in that case,
+        // foreach_ptr_to_base_region() would've returned 0.
+        vm_address_t regstart = get_base_region()->addr;
 
-        DEBUG("Looking for a pointer to it...");
-        vm_address_t ptr = ~0;
-        for(vm_address_t addr = 0; 1; addr += size)
-        {
-            DEBUG("Searching for next region at " ADDR "...", addr);
-            depth = 0xff;
-            if(vm_region_recurse_64(kernel_task, &addr, &size, &depth, (vm_region_info_t)&info, &info_count) != KERN_SUCCESS)
-            {
-                break;
-            }
-
-            if(info.share_mode == SM_PRIVATE && !info.is_submap)
-            {
-                DEBUG("Found private region " ADDR "-" ADDR ", dumping and scanning it...", addr, addr + size);
-                vm_address_t *buf = malloc(size);
-                if(buf == NULL)
-                {
-                    DEBUG("Memory allocation error, returning 0.");
-                    return 0;
-                }
-                if(kernel_read(addr, size, buf) != size)
-                {
-                    DEBUG("Kernel I/O error, returning 0.");
-                    free(buf);
-                    return 0;
-                }
-                for(vm_address_t *p = buf, *last = (vm_address_t*)&((char*)p)[size]; p < last; ++p)
-                {
-                    if(*p >= regstart && *p < regend && *p < ptr)
-                    {
-                        ptr = *p;
-                        DEBUG("Candidate: " ADDR, ptr);
-                    }
-                }
-                free(buf);
-            }
-        }
-
-        if(ptr < regstart || ptr >= regend)
-        {
-            DEBUG("Found no valid pointer to base region, returning 0.");
-            return 0;
-        }
         DEBUG("Lowest pointer to base region: " ADDR, ptr);
-
         for(vm_address_t addr = (ptr >> 20) << 20; addr >= regstart; addr -= 0x100000)
         {
             mach_hdr_t hdr;
@@ -399,12 +468,512 @@ vm_address_t get_kernel_base(void)
             }
             DEBUG("Got kernel base address, caching it.");
             kbase = haddr;
-            initialized = 1;
+            initialized = true;
             DEBUG("kernel_base = " ADDR, kbase);
             break;
 
             next:;
         }
+    }
+    return kbase;
+}
+#endif
+
+// true = continue, false = abort
+typedef bool (*kernel_region_callback_t) (vm_address_t, vm_size_t, vm_region_submap_info_data_64_t*, void*);
+
+// true = success, false = failure
+static bool foreach_kernel_region(kernel_region_callback_t cb, void *arg)
+{
+    DEBUG("Looping over kernel memory regions...");
+    task_t kernel_task;
+    if(get_kernel_task(&kernel_task) != KERN_SUCCESS)
+    {
+        return false;
+    }
+
+    vm_region_submap_info_data_64_t info;
+    vm_size_t size;
+    mach_msg_type_number_t info_count = VM_REGION_SUBMAP_INFO_COUNT_64;
+    unsigned int depth;
+    for(vm_address_t addr = 0; 1; addr += size)
+    {
+        DEBUG("Searching for next region at " ADDR "...", addr);
+        depth = UINT_MAX;
+        if(vm_region_recurse_64(kernel_task, &addr, &size, &depth, (vm_region_info_t)&info, &info_count) != KERN_SUCCESS)
+        {
+            break;
+        }
+        if(!cb(addr, size, &info, arg))
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+typedef struct
+{
+    const char *str;
+    size_t bytelen;
+    vm_address_t addr;
+} get_kernel_base_ios9_cb_str_args_t;
+
+static bool get_kernel_base_ios9_cb_str(vm_address_t addr, vm_size_t size, vm_region_submap_info_data_64_t *info, void *arg)
+{
+    get_kernel_base_ios9_cb_str_args_t *args = arg;
+    if(info->user_tag == VM_KERN_MEMORY_ZONE)
+    {
+        DEBUG("Found zalloc region " ADDR "-" ADDR ", dumping and scanning it...", addr, addr + size);
+        char *mem = malloc(size);
+        if(mem == NULL)
+        {
+            DEBUG("Memory allocation error, aborting.");
+            return false;
+        }
+        if(kernel_read(addr, size, mem) != size)
+        {
+            DEBUG("Kernel I/O error, aborting.");
+            free(mem);
+            return false;
+        }
+        char *found = memmem(mem, size, args->str, args->bytelen);
+        if(found != NULL)
+        {
+            DEBUG("Found IOKitBuildVersion at " ADDR, addr + (found - mem));
+            if(args->addr == 0)
+            {
+                args->addr = addr + (found - mem);
+            }
+            else
+            {
+                DEBUG("IOKitBuildVersion exists more than once, aborting.");
+                free(mem);
+                return false;
+            }
+        }
+        free(mem);
+    }
+    return true;
+}
+
+typedef struct
+{
+    vm_address_t vtab;
+    int          retainCount;
+    unsigned int flags;
+    unsigned int length;
+    vm_address_t string;
+} OSString;
+
+typedef struct
+{
+    vm_address_t addr;
+    size_t len;
+    vm_address_t vtab;
+} get_kernel_base_ios9_cb_ptr_args_t;
+
+static bool get_kernel_base_ios9_cb_ptr(vm_address_t addr, vm_size_t size, vm_region_submap_info_data_64_t *info, void *arg)
+{
+    get_kernel_base_ios9_cb_ptr_args_t *args = arg;
+    if(info->user_tag == VM_KERN_MEMORY_ZONE)
+    {
+        DEBUG("Found zalloc region " ADDR "-" ADDR ", dumping and scanning it...", addr, addr + size);
+        char *mem = malloc(size);
+        if(mem == NULL)
+        {
+            DEBUG("Memory allocation error, aborting.");
+            return false;
+        }
+        if(kernel_read(addr, size, mem) != size)
+        {
+            DEBUG("Kernel I/O error, aborting.");
+            free(mem);
+            return false;
+        }
+        OSString *osstr = NULL;
+        size_t off = (char*)(&osstr->string) - (char*)osstr;
+        for(size_t i = off; i < size; i += sizeof(vm_address_t))
+        {
+            if(*(vm_address_t*)(&mem[i]) == args->addr)
+            {
+                DEBUG("Found pointer to IOKitBuildVersion at " ADDR, (vm_address_t)(addr + i));
+                osstr = (OSString*)&mem[i - off];
+                if(verbose)
+                {
+                    fprintf(stderr, "OSString:\n"
+                                    "{\n"
+                                    "    vtab         = " ADDR "\n"
+                                    "    retainCount  = %d\n"
+                                    "    flags        = %u\n"
+                                    "    length       = %u\n"
+                                    "    string       = " ADDR "\n"
+                                    "}\n"
+                                    , osstr->vtab, osstr->retainCount, osstr->flags, osstr->length, osstr->string);
+                }
+#ifdef __LP64__
+                if(osstr->vtab < 0x8000000000000000) // if this doesn't hold for centuries, I'm gonna get mad
+#else
+                if(osstr->vtab < 0x80000000)
+#endif
+                {
+                    DEBUG("Invalid vtab, skipping.");
+                }
+                else if(osstr->length != args->len)
+                {
+                    DEBUG("Non-matching length, skipping.");
+                }
+                else
+                {
+                    DEBUG("Returning with vtab " ADDR, osstr->vtab);
+                    args->vtab = osstr->vtab;
+                    free(mem);
+                    return false;
+                }
+            }
+        }
+        free(mem);
+    }
+    return true;
+}
+
+static vm_address_t get_kernel_base_ios9(vm_address_t regstart, vm_address_t regend)
+{
+    vm_address_t ret = 0;
+
+    task_t kernel_task;
+    if(get_kernel_task(&kernel_task) != KERN_SUCCESS)
+    {
+        goto out0;
+    }
+
+    DEBUG("Getting IO registry root...");
+    io_registry_entry_t root = IORegistryGetRootEntry(kIOMasterPortDefault);
+    if(!MACH_PORT_VALID(root))
+    {
+        DEBUG("Failed to get IO registry root, returning 0.");
+        goto out0;
+    }
+
+    DEBUG("Getting IOKitBuildVersion...");
+    CFTypeRef obj = IORegistryEntryCreateCFProperty(root, CFSTR("IOKitBuildVersion"), NULL, 0);
+    if(obj == NULL)
+    {
+        DEBUG("IOKitBuildVersion property doesn't exist, returning 0.");
+        goto out1;
+    }
+    CFTypeID type = CFGetTypeID(obj);
+    if(type != CFStringGetTypeID())
+    {
+        if(verbose)
+        {
+            CFShow(obj);
+        }
+        DEBUG("IOKitBuildVersion isn't a string, returning 0.");
+        goto out2;
+    }
+
+    get_kernel_base_ios9_cb_str_args_t args =
+    {
+        .str = NULL,
+        .bytelen = 0,
+        .addr = 0,
+    };
+    args.str = CFStringGetCStringPtr((CFStringRef)obj, kCFStringEncodingUTF8);
+    if(args.str == NULL)
+    {
+        DEBUG("Char pointer is NULL, returning 0.");
+        goto out2;
+    }
+    DEBUG("IOKitBuildVersion: %s", args.str);
+    args.bytelen = strlen(args.str) + 1;
+
+    DEBUG("Getting kernel address of IOKitBuildVersion...");
+    if(!foreach_kernel_region(&get_kernel_base_ios9_cb_str, &args))
+    {
+        goto out2;
+    }
+    if(args.addr == 0)
+    {
+        DEBUG("Failed to find kernel address of IOKitBuildVersion, returning 0.");
+        goto out2;
+    }
+
+    DEBUG("Looking for OSString referencing IOKitBuildVersion...");
+    get_kernel_base_ios9_cb_ptr_args_t ptr =
+    {
+        .addr = args.addr,
+        .len = args.bytelen,
+        .vtab = 0,
+    };
+    foreach_kernel_region(&get_kernel_base_ios9_cb_ptr, &ptr); // return value is irrelevant
+    if(ptr.vtab == 0)
+    {
+        DEBUG("Failed to find OSString referencing IOKitBuildVersion, returning 0.");
+        goto out2;
+    }
+
+    DEBUG("Dumping 16 pointers from vtab...");
+    vm_address_t lowest = ~0;
+    vm_address_t ptrs[16];
+    if(kernel_read(ptr.vtab, sizeof(ptrs), ptrs) != sizeof(ptrs))
+    {
+        DEBUG("Kernel I/O error, returning 0.");
+        goto out2;
+    }
+    for(size_t i = 0; i < sizeof(ptrs)/sizeof(*ptrs); ++i)
+    {
+        DEBUG("%2lu: " ADDR, i, ptrs[i]);
+        if(ptrs[i] >= regstart && ptrs[i] < regend && ptrs[i] < lowest)
+        {
+            lowest = ptrs[i];
+        }
+    }
+    if(!(lowest >= regstart && lowest < regend))
+    {
+        DEBUG("Failed to find pointer to base region.");
+        goto out2;
+    }
+
+    DEBUG("Starting at " ADDR ", searching backwards...", lowest);
+    for(vm_address_t addr = ((lowest >> 20) << 20) +
+#ifdef __LP64__
+            2 * IMAGE_OFFSET    // 0x4000 for 64-bit on >=9.0
+#else
+            IMAGE_OFFSET        // 0x1000 for 32-bit, regardless of OS version
+#endif
+        ; addr >= regstart; addr -= 0x100000)
+    {
+        mach_hdr_t hdr;
+        DEBUG("Looking for mach header at " ADDR "...", addr);
+        if(kernel_read(addr, sizeof(hdr), &hdr) != sizeof(hdr))
+        {
+            DEBUG("Kernel I/O error, returning 0.");
+            goto out2;
+        }
+        if(hdr.magic == MACH_HEADER_MAGIC && hdr.filetype == MH_EXECUTE)
+        {
+            DEBUG("Found Mach-O of type MH_EXECUTE at " ADDR ", returning success.", addr);
+            ret = addr;
+            break;
+        }
+    }
+
+    out2:;
+    CFRelease(obj);
+    out1:;
+    IOObjectRelease(root);
+    out0:;
+    return ret;
+}
+
+static vm_address_t get_kernel_base_ios8(vm_address_t regstart)
+{
+    // things used to be so simple...
+    vm_address_t addr = regstart + IMAGE_OFFSET + 0x200000;
+
+    mach_hdr_t hdr;
+    DEBUG("Looking for mach header at " ADDR "...", addr);
+    if(kernel_read(addr, sizeof(hdr), &hdr) != sizeof(hdr))
+    {
+        DEBUG("Kernel I/O error, returning 0.");
+        return 0;
+    }
+    if(hdr.magic == MACH_HEADER_MAGIC && hdr.filetype == MH_EXECUTE)
+    {
+        DEBUG("Success!");
+    }
+    else
+    {
+        DEBUG("Not a Mach-O header there, subtracting 0x200000.");
+        addr -= 0x200000;
+    }
+    return addr;
+}
+
+typedef struct
+{
+    vm_address_t regstart;
+    vm_address_t regend;
+} get_kernel_base_cb_args_t;
+
+static bool get_kernel_base_cb(vm_address_t addr, vm_size_t size, vm_region_submap_info_data_64_t *info, void *arg)
+{
+    get_kernel_base_cb_args_t *args = arg;
+    DEBUG("Found region " ADDR "-" ADDR " with %c%c%c", addr, addr + size, (info->protection) & VM_PROT_READ ? 'r' : '-', (info->protection) & VM_PROT_WRITE ? 'w' : '-', (info->protection) & VM_PROT_EXECUTE ? 'x' : '-');
+    if
+    (
+        (info->protection & (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE)) == 0 &&
+        size >          1024*1024*1024 &&
+#ifdef __LP64__
+        size <= 16ULL * 1024*1024*1024 && // this is always true for 32-bit
+#endif
+        info->share_mode == SM_EMPTY
+    )
+    {
+        if(args->regstart == 0 && args->regend == 0)
+        {
+            DEBUG("Found a matching memory region.");
+            args->regstart = addr;
+            args->regend   = addr + size;
+        }
+        else
+        {
+            DEBUG("Found more than one matching memory region, aborting.");
+            return false;
+        }
+    }
+
+    return true;
+}
+
+vm_address_t get_kernel_base(void)
+{
+    static vm_address_t kbase = 0;
+    static bool initialized = false;
+    if(!initialized)
+    {
+        DEBUG("Getting kernel base address...");
+
+        DEBUG("Getting base region address...");
+        get_kernel_base_cb_args_t args =
+        {
+            .regstart = 0,
+            .regend = 0,
+        };
+        if(!foreach_kernel_region(&get_kernel_base_cb, &args))
+        {
+            return 0;
+        }
+        if(args.regstart == 0)
+        {
+            DEBUG("Failed to find base region, returning 0.");
+            return 0;
+        }
+        if(args.regend < args.regstart)
+        {
+            DEBUG("Base region has overflowing size, returning 0.");
+            return 0;
+        }
+        DEBUG("Base region is at " ADDR "-" ADDR ".", args.regstart, args.regend);
+
+        vm_address_t addr = kCFCoreFoundationVersionNumber <= kCFCoreFoundationVersionNumber_iOS_8_x_Max ? get_kernel_base_ios8(args.regstart) : get_kernel_base_ios9(args.regstart, args.regend);
+        if(addr == 0)
+        {
+            return 0;
+        }
+
+        DEBUG("Got address " ADDR ", doing sanity checks...", addr);
+        mach_hdr_t hdr;
+        if(kernel_read(addr, sizeof(hdr), &hdr) != sizeof(hdr))
+        {
+            DEBUG("Kernel I/O error, returning 0.");
+            return 0;
+        }
+        if(hdr.magic != MACH_HEADER_MAGIC)
+        {
+            DEBUG("Header has wrong magic, returning 0 (%08x)", hdr.magic);
+            return 0;
+        }
+        if(hdr.filetype != MH_EXECUTE)
+        {
+            DEBUG("Header has wrong filetype, returning 0 (%u)", hdr.filetype);
+            return 0;
+        }
+        if(hdr.cputype != MACH_TYPE)
+        {
+            DEBUG("Header has wrong architecture, returning 0 (%u)", hdr.cputype);
+            return 0;
+        }
+        void *cmds = malloc(hdr.sizeofcmds);
+        if(cmds == NULL)
+        {
+            DEBUG("Memory allocation error, returning 0.");
+            return 0;
+        }
+        if(kernel_read(addr + sizeof(hdr), hdr.sizeofcmds, cmds) != hdr.sizeofcmds)
+        {
+            DEBUG("Kernel I/O error, returning 0.");
+            free(cmds);
+            return 0;
+        }
+        bool has_userland_address = false,
+             has_linking = false,
+             has_unixthread = false,
+             has_exec = false;
+        for
+        (
+            struct load_command *cmd = cmds, *end = (struct load_command*)((char*)cmds + hdr.sizeofcmds);
+            cmd < end;
+            cmd = (struct load_command*)((char*)cmd + cmd->cmdsize)
+        )
+        {
+            switch(cmd->cmd)
+            {
+                case MACH_LC_SEGMENT:
+                    {
+                        mach_seg_t *seg = (mach_seg_t*)cmd;
+#ifdef __LP64__
+                        if(seg->vmaddr < 0x8000000000000000) // centuriiieees
+#else
+                        if(seg->vmaddr < 0x80000000)
+#endif
+                        {
+                            has_userland_address = true;
+                            goto end;
+                        }
+                        if(seg->initprot & VM_PROT_EXECUTE)
+                        {
+                            has_exec = true;
+                        }
+                        break;
+                    }
+                case LC_UNIXTHREAD:
+                    has_unixthread = true;
+                    break;
+                case LC_LOAD_DYLIB:
+                case LC_ID_DYLIB:
+                case LC_LOAD_DYLINKER:
+                case LC_ID_DYLINKER:
+                case LC_PREBOUND_DYLIB:
+                case LC_LOAD_WEAK_DYLIB:
+                case LC_REEXPORT_DYLIB:
+                case LC_LAZY_LOAD_DYLIB:
+                case LC_DYLD_INFO:
+                case LC_DYLD_INFO_ONLY:
+                case LC_DYLD_ENVIRONMENT:
+                case LC_MAIN:
+                    has_linking = true;
+                    goto end;
+            }
+        }
+        end:;
+        free(cmds);
+        if(has_userland_address)
+        {
+            DEBUG("Found segment with userland address, returning 0.");
+            return 0;
+        }
+        if(has_linking)
+        {
+            DEBUG("Found linking-related load command, returning 0.");
+            return 0;
+        }
+        if(!has_unixthread)
+        {
+            DEBUG("Binary is missing LC_UNIXTHREAD, returning 0.");
+            return 0;
+        }
+        if(!has_exec)
+        {
+            DEBUG("Binary has no executable segment, returning 0.");
+            return 0;
+        }
+
+        DEBUG("Confirmed base address " ADDR ", caching it.", addr);
+        kbase = addr;
+        initialized = true;
     }
     return kbase;
 }
