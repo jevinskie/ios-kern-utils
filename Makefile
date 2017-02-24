@@ -9,7 +9,7 @@ XZ = ios-kern-utils.tar.xz
 DEB = net.siguza.ios-kern-utils_$(VERSION)_iphoneos-arm.deb
 IGCC_FLAGS = -std=gnu99 -O3 -Wall -I$(SRCDIR)/lib -miphoneos-version-min=6.0 $(CFLAGS)
 LD_FLAGS = -L.
-LD_LIBS = -l$(LIB) $(LDFLAGS)
+LD_LIBS = -l$(LIB) -framework CoreFoundation -framework IOKit $(LDFLAGS)
 LIBTOOL_FLAGS ?= -static $(LIBS)
 
 ifndef IGCC
