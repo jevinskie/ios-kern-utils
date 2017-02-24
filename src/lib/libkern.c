@@ -546,6 +546,10 @@ static bool get_kernel_base_ios9_cb_str(vm_address_t addr, vm_size_t size, vm_re
             {
                 args->addr = addr + (found - mem);
             }
+            else if(args->addr == addr + (found - mem))
+            {
+                DEBUG("Same address, skipping.");
+            }
             else
             {
                 DEBUG("IOKitBuildVersion exists more than once, aborting.");
