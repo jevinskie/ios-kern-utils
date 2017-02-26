@@ -6,9 +6,11 @@
  */
 
 #include <limits.h>             // UINT_MAX
+#include <stdio.h>              // fprintf, snprintf
 #include <stdlib.h>             // free, malloc, random, srandom
 #include <string.h>             // memmem
 #include <time.h>               // time
+#include <unistd.h>             // getpid
 
 #include <mach/host_priv.h>     // host_get_special_port
 #include <mach/kern_return.h>   // KERN_SUCCESS, kern_return_t
@@ -25,16 +27,6 @@
 #include <mach-o/loader.h>      // MH_EXECUTE
 
 #include <CoreFoundation/CoreFoundation.h> // CF*
-// IOKit hacks
-extern const mach_port_t kIOMasterPortDefault;
-typedef mach_port_t io_object_t;
-typedef io_object_t io_registry_entry_t;
-typedef UInt32 IOOptionBits;
-io_registry_entry_t IORegistryGetRootEntry(mach_port_t);
-CFTypeRef IORegistryEntryCreateCFProperty(io_registry_entry_t, CFStringRef, CFAllocatorRef, IOOptionBits);
-kern_return_t IOObjectRelease(io_object_t);
-// Kernel stuff
-#define VM_KERN_MEMORY_ZONE		12
 
 #include "arch.h"               // IMAGE_OFFSET, MACH_TYPE, MACH_HEADER_MAGIC, mach_hdr_t
 #include "debug.h"              // DEBUG
@@ -513,54 +505,15 @@ static bool foreach_kernel_region(kernel_region_callback_t cb, void *arg)
     return true;
 }
 
+#define CB_NUM_VTABS 2
+
 typedef struct
 {
-    const char *str;
-    size_t bytelen;
-    vm_address_t addr;
-} get_kernel_base_ios9_cb_str_args_t;
-
-static bool get_kernel_base_ios9_cb_str(vm_address_t addr, vm_size_t size, vm_region_submap_info_data_64_t *info, void *arg)
-{
-    get_kernel_base_ios9_cb_str_args_t *args = arg;
-    if(info->user_tag == VM_KERN_MEMORY_ZONE)
-    {
-        DEBUG("Found zalloc region " ADDR "-" ADDR ", dumping and scanning it...", addr, addr + size);
-        char *mem = malloc(size);
-        if(mem == NULL)
-        {
-            DEBUG("Memory allocation error, aborting.");
-            return false;
-        }
-        if(kernel_read(addr, size, mem) != size)
-        {
-            DEBUG("Kernel I/O error, aborting.");
-            free(mem);
-            return false;
-        }
-        char *found = memmem(mem, size, args->str, args->bytelen);
-        if(found != NULL)
-        {
-            DEBUG("Found IOKitBuildVersion at " ADDR, addr + (found - mem));
-            if(args->addr == 0)
-            {
-                args->addr = addr + (found - mem);
-            }
-            else if(args->addr == addr + (found - mem))
-            {
-                DEBUG("Same address, skipping.");
-            }
-            else
-            {
-                DEBUG("IOKitBuildVersion exists more than once, aborting.");
-                free(mem);
-                return false;
-            }
-        }
-        free(mem);
-    }
-    return true;
-}
+    vm_address_t regstart;
+    vm_address_t regend;
+    vm_address_t vtab[CB_NUM_VTABS]; // OSString, OSSymbol
+    vm_address_t lowest;
+} get_kernel_base_ios9_cb_args_t;
 
 typedef struct
 {
@@ -571,16 +524,16 @@ typedef struct
     vm_address_t string;
 } OSString;
 
-typedef struct
+enum
 {
-    vm_address_t addr;
-    size_t len;
-    vm_address_t vtab;
-} get_kernel_base_ios9_cb_ptr_args_t;
+    kOSStringNoCopy = 0x00000001,
+};
 
-static bool get_kernel_base_ios9_cb_ptr(vm_address_t addr, vm_size_t size, vm_region_submap_info_data_64_t *info, void *arg)
+#define VM_KERN_MEMORY_ZONE 12
+
+static bool get_kernel_base_ios9_cb(vm_address_t addr, vm_size_t size, vm_region_submap_info_data_64_t *info, void *arg)
 {
-    get_kernel_base_ios9_cb_ptr_args_t *args = arg;
+    get_kernel_base_ios9_cb_args_t *args = arg;
     if(info->user_tag == VM_KERN_MEMORY_ZONE)
     {
         DEBUG("Found zalloc region " ADDR "-" ADDR ", dumping and scanning it...", addr, addr + size);
@@ -596,14 +549,20 @@ static bool get_kernel_base_ios9_cb_ptr(vm_address_t addr, vm_size_t size, vm_re
             free(mem);
             return false;
         }
-        OSString *osstr = NULL;
-        size_t off = (char*)(&osstr->string) - (char*)osstr;
-        for(size_t i = off; i < size; i += sizeof(vm_address_t))
+
+        for(size_t off = 0; off < size - sizeof(OSString); off += sizeof(vm_address_t))
         {
-            if(*(vm_address_t*)(&mem[i]) == args->addr)
+            OSString *osstr = (OSString*)(&mem[off]);
+            if
+            (
+                osstr->retainCount == 0x10001 && // 0x10000 is a tag, not the actual count
+                osstr->flags == kOSStringNoCopy && // referenced, not copied
+                osstr->length > 6 &&osstr->length < 100 && // reasonable length
+                osstr->vtab > args->regstart && osstr->vtab < args->regend && // vtab within base region (need no >= because offset)
+                osstr->string > osstr->vtab && osstr->string < args->regend // string before vtab
+            )
             {
-                DEBUG("Found pointer to IOKitBuildVersion at " ADDR, (vm_address_t)(addr + i));
-                osstr = (OSString*)&mem[i - off];
+                DEBUG("Found OSString at " ADDR, (vm_address_t)(addr + off));
                 if(verbose)
                 {
                     fprintf(stderr, "OSString:\n"
@@ -616,24 +575,28 @@ static bool get_kernel_base_ios9_cb_ptr(vm_address_t addr, vm_size_t size, vm_re
                                     "}\n"
                                     , osstr->vtab, osstr->retainCount, osstr->flags, osstr->length, osstr->string);
                 }
-#ifdef __LP64__
-                if(osstr->vtab < 0x8000000000000000) // if this doesn't hold for centuries, I'm gonna get mad
-#else
-                if(osstr->vtab < 0x80000000)
-#endif
+                for(size_t i = 0; i < CB_NUM_VTABS; ++i)
                 {
-                    DEBUG("Invalid vtab, skipping.");
+                    if(args->vtab[i] == 0)
+                    {
+                        DEBUG("Adding vtab to list...");
+                        args->vtab[i] = osstr->vtab;
+                        goto good;
+                    }
+                    else if(args->vtab[i] == osstr->vtab)
+                    {
+                        DEBUG("Known vtab, skipping.");
+                        goto good;
+                    }
                 }
-                else if(osstr->length != args->len)
+                DEBUG("Found more than %u different vtabs, aborting.", CB_NUM_VTABS);
+                free(mem);
+                return false;
+
+                good:;
+                if(args->lowest == 0 || args->lowest > osstr->string)
                 {
-                    DEBUG("Non-matching length, skipping.");
-                }
-                else
-                {
-                    DEBUG("Returning with vtab " ADDR, osstr->vtab);
-                    args->vtab = osstr->vtab;
-                    free(mem);
-                    return false;
+                    args->lowest = osstr->string;
                 }
             }
         }
@@ -644,132 +607,48 @@ static bool get_kernel_base_ios9_cb_ptr(vm_address_t addr, vm_size_t size, vm_re
 
 static vm_address_t get_kernel_base_ios9(vm_address_t regstart, vm_address_t regend)
 {
-    vm_address_t ret = 0;
-
-    task_t kernel_task;
-    if(get_kernel_task(&kernel_task) != KERN_SUCCESS)
+    get_kernel_base_ios9_cb_args_t args =
     {
-        goto out0;
-    }
-
-    DEBUG("Getting IO registry root...");
-    io_registry_entry_t root = IORegistryGetRootEntry(kIOMasterPortDefault);
-    if(!MACH_PORT_VALID(root))
-    {
-        DEBUG("Failed to get IO registry root, returning 0.");
-        goto out0;
-    }
-
-    DEBUG("Getting IOKitBuildVersion...");
-    CFTypeRef obj = IORegistryEntryCreateCFProperty(root, CFSTR("IOKitBuildVersion"), NULL, 0);
-    if(obj == NULL)
-    {
-        DEBUG("IOKitBuildVersion property doesn't exist, returning 0.");
-        goto out1;
-    }
-    CFTypeID type = CFGetTypeID(obj);
-    if(type != CFStringGetTypeID())
-    {
-        if(verbose)
-        {
-            CFShow(obj);
-        }
-        DEBUG("IOKitBuildVersion isn't a string, returning 0.");
-        goto out2;
-    }
-
-    get_kernel_base_ios9_cb_str_args_t args =
-    {
-        .str = NULL,
-        .bytelen = 0,
-        .addr = 0,
+        .regstart = regstart,
+        .regend = regend,
+        .vtab = {0},
+        .lowest = 0,
     };
-    args.str = CFStringGetCStringPtr((CFStringRef)obj, kCFStringEncodingUTF8);
-    if(args.str == NULL)
+    if(!foreach_kernel_region(&get_kernel_base_ios9_cb, &args))
     {
-        DEBUG("Char pointer is NULL, returning 0.");
-        goto out2;
+        return 0;
     }
-    DEBUG("IOKitBuildVersion: %s", args.str);
-    args.bytelen = strlen(args.str) + 1;
-
-    DEBUG("Getting kernel address of IOKitBuildVersion...");
-    if(!foreach_kernel_region(&get_kernel_base_ios9_cb_str, &args))
+    if(args.lowest == 0)
     {
-        goto out2;
-    }
-    if(args.addr == 0)
-    {
-        DEBUG("Failed to find kernel address of IOKitBuildVersion, returning 0.");
-        goto out2;
+        DEBUG("Failed to find any OSString, returning 0.");
+        return 0;
     }
 
-    DEBUG("Looking for OSString referencing IOKitBuildVersion...");
-    get_kernel_base_ios9_cb_ptr_args_t ptr =
-    {
-        .addr = args.addr,
-        .len = args.bytelen,
-        .vtab = 0,
-    };
-    foreach_kernel_region(&get_kernel_base_ios9_cb_ptr, &ptr); // return value is irrelevant
-    if(ptr.vtab == 0)
-    {
-        DEBUG("Failed to find OSString referencing IOKitBuildVersion, returning 0.");
-        goto out2;
-    }
-
-    DEBUG("Dumping 16 pointers from vtab...");
-    vm_address_t lowest = ~0;
-    vm_address_t ptrs[16];
-    if(kernel_read(ptr.vtab, sizeof(ptrs), ptrs) != sizeof(ptrs))
-    {
-        DEBUG("Kernel I/O error, returning 0.");
-        goto out2;
-    }
-    for(size_t i = 0; i < sizeof(ptrs)/sizeof(*ptrs); ++i)
-    {
-        DEBUG("%2lu: " ADDR, i, ptrs[i]);
-        if(ptrs[i] >= regstart && ptrs[i] < regend && ptrs[i] < lowest)
-        {
-            lowest = ptrs[i];
-        }
-    }
-    if(!(lowest >= regstart && lowest < regend))
-    {
-        DEBUG("Failed to find pointer to base region.");
-        goto out2;
-    }
-
-    DEBUG("Starting at " ADDR ", searching backwards...", lowest);
-    for(vm_address_t addr = ((lowest >> 20) << 20) +
+    DEBUG("Starting at " ADDR ", searching backwards...", args.lowest);
+    for(vm_address_t addr = ((args.lowest >> 20) << 20) +
 #ifdef __LP64__
             2 * IMAGE_OFFSET    // 0x4000 for 64-bit on >=9.0
 #else
             IMAGE_OFFSET        // 0x1000 for 32-bit, regardless of OS version
 #endif
-        ; addr >= regstart; addr -= 0x100000)
+        ; addr > regstart; addr -= 0x100000)
     {
         mach_hdr_t hdr;
         DEBUG("Looking for mach header at " ADDR "...", addr);
         if(kernel_read(addr, sizeof(hdr), &hdr) != sizeof(hdr))
         {
             DEBUG("Kernel I/O error, returning 0.");
-            goto out2;
+            return 0;
         }
         if(hdr.magic == MACH_HEADER_MAGIC && hdr.filetype == MH_EXECUTE)
         {
             DEBUG("Found Mach-O of type MH_EXECUTE at " ADDR ", returning success.", addr);
-            ret = addr;
-            break;
+            return addr;
         }
     }
 
-    out2:;
-    CFRelease(obj);
-    out1:;
-    IOObjectRelease(root);
-    out0:;
-    return ret;
+    DEBUG("Found no mach header, returning 0.");
+    return 0;
 }
 
 static vm_address_t get_kernel_base_ios8(vm_address_t regstart)
