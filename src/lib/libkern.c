@@ -12,18 +12,7 @@
 #include <time.h>               // time
 #include <unistd.h>             // getpid
 
-#include <mach/host_priv.h>     // host_get_special_port
-#include <mach/kern_return.h>   // KERN_SUCCESS, kern_return_t
-#include <mach/mach_init.h>     // mach_host_self, mach_task_self
-#include <mach/message.h>       // mach_msg_type_number_t
-#include <mach/mach_error.h>    // mach_error_string
-#include <mach/mach_traps.h>    // task_for_pid
-#include <mach/mach_types.h>    // task_t, mach_port_t
-#include <mach/port.h>          // MACH_PORT_NULL, MACH_PORT_VALID
-#include <mach/vm_prot.h>       // VM_PROT_*
-#include <mach/vm_region.h>     // SM_*, VM_REGION_SUBMAP_INFO_COUNT_64, vm_region_info_t, vm_region_submap_info_data_64_t
-#include <mach/vm_map.h>        // vm_read_overwrite, vm_region_recurse_64, vm_write
-#include <mach/vm_types.h>      // vm_address_t, vm_size_t
+#include <mach/mach.h>          // Everything mach
 #include <mach-o/loader.h>      // MH_EXECUTE
 
 #include <CoreFoundation/CoreFoundation.h> // CF*
@@ -72,9 +61,10 @@ kern_return_t get_kernel_task(task_t *task)
     if(!initialized)
     {
         DEBUG("Getting kernel task...");
-        DEBUG("Trying task_for_pid(0)...");
+        kern_return_t ret;
         kernel_task = MACH_PORT_NULL;
-        kern_return_t ret = task_for_pid(mach_task_self(), 0, &kernel_task);
+        DEBUG("Trying task_for_pid(0)...");
+        ret = task_for_pid(mach_task_self(), 0, &kernel_task);
         VERIFY_PORT(kernel_task, ret);
         if(ret != KERN_SUCCESS)
         {
@@ -522,7 +512,16 @@ typedef struct
     unsigned int flags;
     unsigned int length;
     vm_address_t string;
-} OSString;
+} OSString9;
+
+typedef struct
+{
+    vm_address_t vtab;
+    int          retainCount;
+    vm_address_t string;
+    unsigned int flags;
+    unsigned int length;
+} OSString10;
 
 enum
 {
@@ -550,16 +549,38 @@ static bool get_kernel_base_ios9_cb(vm_address_t addr, vm_size_t size, vm_region
             return false;
         }
 
-        for(size_t off = 0; off < size - sizeof(OSString); off += sizeof(vm_address_t))
+        for(size_t off = 0; off < size - sizeof(OSString10); off += sizeof(vm_address_t))
         {
-            OSString *osstr = (OSString*)(&mem[off]);
+            vm_address_t vtab;
+            int          retainCount;
+            unsigned int flags;
+            unsigned int length;
+            vm_address_t string;
+            if(kCFCoreFoundationVersionNumber > HAVE_REFACTORED_OSSTRING)
+            {
+                OSString10 *osstr = (OSString10*)(&mem[off]);
+                vtab        = osstr->vtab;
+                retainCount = osstr->retainCount;
+                flags       = osstr->flags;
+                length      = osstr->length;
+                string      = osstr->string;
+            }
+            else
+            {
+                OSString9 *osstr = (OSString9*)(&mem[off]);
+                vtab        = osstr->vtab;
+                retainCount = osstr->retainCount;
+                flags       = osstr->flags;
+                length      = osstr->length;
+                string      = osstr->string;
+            }
             if
             (
-                osstr->retainCount == 0x10001 && // 0x10000 is a tag, not the actual count
-                osstr->flags == kOSStringNoCopy && // referenced, not copied
-                osstr->length > 6 &&osstr->length < 100 && // reasonable length
-                osstr->vtab > args->regstart && osstr->vtab < args->regend && // vtab within base region (need no >= because offset)
-                osstr->string > osstr->vtab && osstr->string < args->regend // string before vtab
+                retainCount == 0x10001                           && // 0x10000 is a tag, not the actual count
+                flags == kOSStringNoCopy                         && // referenced, not copied
+                length > 6              && length < 100          && // reasonable length
+                vtab   > args->regstart && vtab   < args->regend && // vtab within base region
+                string > args->regstart && string < args->regend    // string within base region
             )
             {
                 DEBUG("Found OSString at " ADDR, (vm_address_t)(addr + off));
@@ -573,17 +594,17 @@ static bool get_kernel_base_ios9_cb(vm_address_t addr, vm_size_t size, vm_region
                                     "    length       = %u\n"
                                     "    string       = " ADDR "\n"
                                     "}\n"
-                                    , osstr->vtab, osstr->retainCount, osstr->flags, osstr->length, osstr->string);
+                                    , vtab, retainCount, flags, length, string);
                 }
                 for(size_t i = 0; i < CB_NUM_VTABS; ++i)
                 {
                     if(args->vtab[i] == 0)
                     {
                         DEBUG("Adding vtab to list...");
-                        args->vtab[i] = osstr->vtab;
+                        args->vtab[i] = vtab;
                         goto good;
                     }
-                    else if(args->vtab[i] == osstr->vtab)
+                    else if(args->vtab[i] == vtab)
                     {
                         DEBUG("Known vtab, skipping.");
                         goto good;
@@ -594,9 +615,10 @@ static bool get_kernel_base_ios9_cb(vm_address_t addr, vm_size_t size, vm_region
                 return false;
 
                 good:;
-                if(args->lowest == 0 || args->lowest > osstr->string)
+                vm_address_t lower = vtab > string ? string : vtab;
+                if(args->lowest == 0 || args->lowest > lower)
                 {
-                    args->lowest = osstr->string;
+                    args->lowest = lower;
                 }
             }
         }
@@ -741,7 +763,7 @@ vm_address_t get_kernel_base(void)
         }
         DEBUG("Base region is at " ADDR "-" ADDR ".", args.regstart, args.regend);
 
-        vm_address_t addr = kCFCoreFoundationVersionNumber <= kCFCoreFoundationVersionNumber_iOS_8_x_Max ? get_kernel_base_ios8(args.regstart) : get_kernel_base_ios9(args.regstart, args.regend);
+        vm_address_t addr = kCFCoreFoundationVersionNumber <= HAVE_TAGGED_REGIONS ? get_kernel_base_ios8(args.regstart) : get_kernel_base_ios9(args.regstart, args.regend);
         if(addr == 0)
         {
             return 0;
@@ -797,11 +819,7 @@ vm_address_t get_kernel_base(void)
                 case MACH_LC_SEGMENT:
                     {
                         mach_seg_t *seg = (mach_seg_t*)cmd;
-#ifdef __LP64__
-                        if(seg->vmaddr < 0x8000000000000000) // centuriiieees
-#else
-                        if(seg->vmaddr < 0x80000000)
-#endif
+                        if(seg->vmaddr < KERNEL_SPACE)
                         {
                             has_userland_address = true;
                             goto end;
