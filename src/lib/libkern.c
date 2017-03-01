@@ -518,9 +518,9 @@ typedef struct
 {
     vm_address_t vtab;
     int          retainCount;
+    unsigned int flags:14;
+    unsigned int length:18;
     vm_address_t string;
-    unsigned int flags;
-    unsigned int length;
 } OSString10;
 
 enum
@@ -549,7 +549,7 @@ static bool get_kernel_base_ios9_cb(vm_address_t addr, vm_size_t size, vm_region
             return false;
         }
 
-        for(size_t off = 0; off < size - sizeof(OSString10); off += sizeof(vm_address_t))
+        for(size_t off = 0; off < size - sizeof(OSString9); off += sizeof(vm_address_t))
         {
             vm_address_t vtab;
             int          retainCount;
