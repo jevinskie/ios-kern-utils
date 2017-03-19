@@ -879,11 +879,31 @@ vm_address_t get_kernel_base(void)
     return kbase;
 }
 
+typedef struct
+{
+    vm_address_t addr;
+    vm_size_t size;
+    bool wire;
+} kernel_wire_cb_args_t;
+
+static bool kernel_wire_cb(vm_address_t addr, vm_size_t size, vm_region_submap_info_data_64_t *info, void *arg)
+{
+    kernel_wire_cb_args_t *args = arg;
+    if(args->addr >= addr && args->addr < addr + size) // if starting address falls into region
+    {
+        args->wire = ((args->addr - addr) + args->size <= size) &&  // ignore out of bounds access
+                     ((info->protection & VM_PROT_ALL) > 0);        // as well as --- mappings
+        return false;
+    }
+    return true;
+}
+
 vm_size_t kernel_read(vm_address_t addr, vm_size_t size, void *buf)
 {
     DEBUG("Reading kernel bytes " ADDR "-" ADDR, addr, addr + size);
     kern_return_t ret;
     task_t kernel_task;
+    host_t host_priv = MACH_PORT_NULL;
     vm_size_t remainder = size,
               bytes_read = 0;
 
@@ -893,12 +913,34 @@ vm_size_t kernel_read(vm_address_t addr, vm_size_t size, void *buf)
         return -1;
     }
 
+    kernel_wire_cb_args_t args =
+    {
+        .addr = addr,
+        .size = size,
+        .wire = false,
+    };
+    foreach_kernel_region(kernel_wire_cb, &args);
+    if(args.wire)
+    {
+        DEBUG("Wiring region for reading...");
+        host_priv = mach_host_self();
+    }
+
     // The vm_* APIs are part of the mach_vm subsystem, which is a MIG thing
     // and therefore has a hard limit of 0x1000 bytes that it accepts. Due to
     // this, we have to do both reading and writing in chunks smaller than that.
     for(vm_address_t end = addr + size; addr < end; remainder -= size)
     {
         size = remainder > MAX_CHUNK_SIZE ? MAX_CHUNK_SIZE : remainder;
+        if(args.wire)
+        {
+            ret = vm_wire(host_priv, kernel_task, addr, size, VM_PROT_READ);
+            if(ret != KERN_SUCCESS)
+            {
+                DEBUG("vm_wire error: %s", mach_error_string(ret));
+                break;
+            }
+        }
         ret = vm_read_overwrite(kernel_task, addr, size, (vm_address_t)&((char*)buf)[bytes_read], &size);
         if(ret != KERN_SUCCESS || size == 0)
         {
@@ -906,6 +948,15 @@ vm_size_t kernel_read(vm_address_t addr, vm_size_t size, void *buf)
             break;
         }
         bytes_read += size;
+        if(args.wire)
+        {
+            ret = vm_wire(host_priv, kernel_task, addr, size, VM_PROT_NONE);
+            if(ret != KERN_SUCCESS)
+            {
+                DEBUG("vm_unwire error: %s", mach_error_string(ret));
+                break;
+            }
+        }
         addr += size;
     }
 
@@ -917,8 +968,9 @@ vm_size_t kernel_write(vm_address_t addr, vm_size_t size, void *buf)
     DEBUG("Writing to kernel at " ADDR "-" ADDR, addr, addr + size);
     kern_return_t ret;
     task_t kernel_task;
-    vm_size_t remainder = size;
-    vm_size_t bytes_written = 0;
+    host_t host_priv = MACH_PORT_NULL;
+    vm_size_t remainder = size,
+              bytes_written = 0;
 
     ret = get_kernel_task(&kernel_task);
     if(ret != KERN_SUCCESS)
@@ -926,9 +978,31 @@ vm_size_t kernel_write(vm_address_t addr, vm_size_t size, void *buf)
         return -1;
     }
 
+    kernel_wire_cb_args_t args =
+    {
+        .addr = addr,
+        .size = size,
+        .wire = false,
+    };
+    foreach_kernel_region(kernel_wire_cb, &args);
+    if(args.wire)
+    {
+        DEBUG("Wiring region for writing...");
+        host_priv = mach_host_self();
+    }
+
     for(vm_address_t end = addr + size; addr < end; remainder -= size)
     {
         size = remainder > MAX_CHUNK_SIZE ? MAX_CHUNK_SIZE : remainder;
+        if(args.wire)
+        {
+            ret = vm_wire(host_priv, kernel_task, addr, size, VM_PROT_WRITE);
+            if(ret != KERN_SUCCESS)
+            {
+                DEBUG("vm_wire error: %s", mach_error_string(ret));
+                break;
+            }
+        }
         ret = vm_write(kernel_task, addr, (vm_offset_t)&((char*)buf)[bytes_written], size);
         if(ret != KERN_SUCCESS)
         {
@@ -936,6 +1010,15 @@ vm_size_t kernel_write(vm_address_t addr, vm_size_t size, void *buf)
             break;
         }
         bytes_written += size;
+        if(args.wire)
+        {
+            ret = vm_wire(host_priv, kernel_task, addr, size, VM_PROT_NONE);
+            if(ret != KERN_SUCCESS)
+            {
+                DEBUG("vm_unwire error: %s", mach_error_string(ret));
+                break;
+            }
+        }
         addr += size;
     }
 
