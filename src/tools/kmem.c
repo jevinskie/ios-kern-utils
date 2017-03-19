@@ -56,8 +56,13 @@ static void hexdump(unsigned char *data, size_t size)
 
 static void print_usage(const char *self)
 {
-    fprintf(stderr, "Usage: %s [-r] [-h] addr length\n"
-                    "0x for hex, no prefix for decimal\n", self);
+    fprintf(stderr, "Usage: %s [-r] [-u] [-h] addr length\n"
+                    "0x for hex, no prefix for decimal\n"
+                    "\n"
+                    "Options:\n"
+                    "    -h  Help\n"
+                    "    -r  Raw (binary) output (defaults to hex)\n"
+                    , self);
 }
 
 static void too_few_args(const char *self)
@@ -78,7 +83,7 @@ int main(int argc, char **argv)
         switch (c)
         {
             case 'r':
-                raw = 1;
+                raw = true;
                 break;
             case 'h':
                 print_usage(argv[0]);
