@@ -5,6 +5,7 @@
  * Copyright (c) 2016-2017 Siguza
  */
 
+#include <dlfcn.h>              // RTLD_*, dl*
 #include <limits.h>             // UINT_MAX
 #include <stdio.h>              // fprintf, snprintf
 #include <stdlib.h>             // free, malloc, random, srandom
@@ -14,6 +15,9 @@
 
 #include <mach/mach.h>          // Everything mach
 #include <mach-o/loader.h>      // MH_EXECUTE
+#include <mach-o/nlist.h>       // struct nlist_64
+#include <sys/mman.h>           // mmap, munmap, MAP_FAILED
+#include <sys/stat.h>           // fstat, struct stat
 
 #include <CoreFoundation/CoreFoundation.h> // CF*
 
@@ -121,9 +125,10 @@ kern_return_t get_kernel_task(task_t *task)
 // I worked around this by first locating the base region, checking for the
 // Mach-O magic, and simply adding 0x100000 to the address until I found it.
 //
-// With iOS 10, the base address identification was no longer sufficient, as
-// another null mapping of 64GB size had popped up. So in addition to the other
-// two, I added the criterium of a size smaller than 16GB.
+// With iOS 10 (and seemingly even 9 on some devices), the base address
+// identification was no longer sufficient, as another null mapping of 64GB size
+// had popped up. So in addition to the other two, I added the criterium of a
+// size smaller than 16GB.
 // In addition to that, the part of the base region between its base address and
 // the kernel base does no longer have to be mapped (that is, it's still part of
 // the memory region, but trying to access it will cause a panic). This
@@ -132,334 +137,24 @@ kern_return_t get_kernel_task(task_t *task)
 // get it to work through luck, but that chance is pretty small.
 //
 //
-// Current observations and ideas:
+// Current implementation:
 //
 // The base region still exists, still contains the kernel, and is still
 // uniquely identifiable, but more information is required before one should
-// attempt to access it. One source this "more information" could be obtained
-// from are other memory regions.
-// A great many memory region outright panic the device when accessed. However,
-// all those with share_mode == SM_PRIVATE && !is_submap never do that,
-// i.e. can always be read from.
-// My idea from there on is to iterate over all of these memory regions on a
-// pointer-sized granularity, look for any value that falls within the base
-// region, and take the lowest of those. From there on, I round down to the next
-// lower multiple of 0x100000 and start looking for the header.
+// attempt to access it. This "more information" can only be obtained from
+// other memory regions.
+// Now, kernel heap allocations larger than two page sizes go to either the
+// kalloc_map or the kernel_map rather than zalloc, meaning they will directly
+// pop up on the list of memory regions, and be identifiable by having a
+// user_tag of VM_KERN_MEMORY_LIBKERN.
+//
+// So the current idea is to find a size of which no allocation with user_tag
+// VM_KERN_MEMORY_LIBKERN exists, and to subsequently make such an allocation,
+// which will then be uniquely identifiable. The allocation further incorporates
+// OSObjects, which will contain vtable pointers, which are valid pointers to
+// the kernel's base region. From there, we simply search backwards until we
+// find the kernel header.
 
-#if 0
-typedef struct
-{
-    vm_address_t addr;
-    vm_size_t size;
-} region_t;
-
-region_t* get_base_region(void)
-{
-    static bool initialized = false;
-    static region_t region = // allows us to return a pointer
-    {
-        .addr = 0,
-        .size = 0,
-    };
-    if(!initialized)
-    {
-        DEBUG("Getting base region address...");
-        task_t kernel_task;
-        if(get_kernel_task(&kernel_task) != KERN_SUCCESS)
-        {
-            return NULL;
-        }
-
-        vm_region_submap_info_data_64_t info;
-        vm_size_t size;
-        mach_msg_type_number_t info_count = VM_REGION_SUBMAP_INFO_COUNT_64;
-        unsigned int depth = 0;
-
-        DEBUG("Looping over kernel memory regions...");
-        for(vm_address_t addr = 0; 1; addr += size)
-        {
-            DEBUG("Searching for next region at " ADDR "...", addr);
-            depth = 0xff;
-            if(vm_region_recurse_64(kernel_task, &addr, &size, &depth, (vm_region_info_t)&info, &info_count) != KERN_SUCCESS)
-            {
-                break;
-            }
-            DEBUG("Found region " ADDR "-" ADDR "with %c%c%c", addr, addr + size, (info.protection) & VM_PROT_READ ? 'r' : '-', (info.protection) & VM_PROT_WRITE ? 'w' : '-', (info.protection) & VM_PROT_EXECUTE ? 'x' : '-');
-
-            if
-            (
-                (info.protection & (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE)) == 0 &&
-                size >       1024*1024*1024 &&
-#ifdef __LP64__
-                size <= 16ULL * 1024*1024*1024 && // this is always true for 32-bit
-#endif
-                info.share_mode == SM_EMPTY
-            )
-            {
-                if(region.addr == 0 && region.size == 0)
-                {
-                    DEBUG("Found a matching memory region.");
-                    region.addr = addr;
-                    region.size = size;
-                }
-                else
-                {
-                    DEBUG("Found more than one matching memory region, returning NULL.");
-                    return NULL;
-                }
-            }
-        }
-
-        if(region.addr == 0)
-        {
-            DEBUG("Found no matching region, returning NULL.");
-            return NULL;
-        }
-        if(region.addr + region.size < region.addr)
-        {
-            DEBUG("Base region has overflowing size, returning NULL.");
-            return NULL;
-        }
-        DEBUG("Base region is at " ADDR "-" ADDR ".", region.addr, region.addr + region.size);
-        initialized = true;
-    }
-    return &region;
-}
-
-typedef bool (*foreach_callback_t) (vm_address_t);
-
-vm_address_t foreach_ptr_to_base_region(foreach_callback_t cb)
-{
-    region_t *reg = get_base_region();
-    if(reg == NULL)
-    {
-        return 0;
-    }
-    vm_address_t regstart = reg->addr,
-                 regend   = reg->addr + reg->size;
-
-    task_t kernel_task;
-    if(get_kernel_task(&kernel_task) != KERN_SUCCESS)
-    {
-        return 0;
-    }
-
-    vm_region_submap_info_data_64_t info;
-    vm_size_t size;
-    mach_msg_type_number_t info_count = VM_REGION_SUBMAP_INFO_COUNT_64;
-    unsigned int depth = 0;
-
-    DEBUG("Looking for a pointer to base region...");
-    for(vm_address_t addr = 0; 1; addr += size)
-    {
-        DEBUG("Searching for next region at " ADDR "...", addr);
-        depth = 0xff;
-        if(vm_region_recurse_64(kernel_task, &addr, &size, &depth, (vm_region_info_t)&info, &info_count) != KERN_SUCCESS)
-        {
-            break;
-        }
-
-        if(info.share_mode == SM_PRIVATE && !info.is_submap)
-        {
-            DEBUG("Found private region " ADDR "-" ADDR ", dumping and scanning it...", addr, addr + size);
-            char *buf = malloc(size);
-            if(buf == NULL)
-            {
-                DEBUG("Memory allocation error, returning 0.");
-                return 0;
-            }
-            if(kernel_read(addr, size, buf) != size)
-            {
-                DEBUG("Kernel I/O error, returning 0.");
-                free(buf);
-                return 0;
-            }
-            DEBUG("Looking for stack frames...");
-            for(vm_size_t off = 0; off < (size - sizeof(void*)); off += sizeof(void*))
-            {
-                vm_size_t cur = off;
-                size_t len = 0;
-                vm_address_t lowest = ~0;
-                do
-                {
-                    vm_address_t fp = ((vm_address_t*)&buf[cur])[0],
-                                 lr = ((vm_address_t*)&buf[cur])[1];
-                    if(lr > regstart && lr < regend) // DEBUG-XXX
-                    {
-                        DEBUG(ADDR " fp: " ADDR " lr: " ADDR, addr + cur, fp, lr);
-                    }
-                    if
-                    (
-                        fp > addr + cur + sizeof(void*) && fp < addr + size - sizeof(void*) &&
-                        lr > regstart && lr < regend // absolute < and > are intentional
-                    )
-                    {
-                        DEBUG(ADDR " fp: " ADDR " lr: " ADDR, addr + cur, fp, lr);
-                        if(lr < lowest)
-                        {
-                            lowest = lr;
-                        }
-                        cur = fp - addr;
-                        ++len;
-                    }
-                    else
-                    {
-                        if(len >= 5 && cb(lowest)) // threshold of 5 frames
-                        {
-                            free(buf);
-                            return lowest;
-                        }
-                        break;
-                    }
-                } while(true);
-            }
-            free(buf);
-        }
-    }
-    DEBUG("Callback never returned true, returning 0.");
-    return 0;
-}
-
-// 0 = true
-// 1 = false
-// 2 = fatal
-static uint8_t is_kernel_header(mach_hdr_t *hdr)
-{
-    if(hdr->magic != MACH_HEADER_MAGIC)
-    {
-        return 1;
-    }
-    if(hdr->cputype != MACH_TYPE)
-    {
-        DEBUG("Found Mach-O, but for wrong architecture: 0x%x", hdr->cputype);
-        return 2;
-    }
-    if(hdr->filetype != MH_EXECUTE)
-    {
-        DEBUG("Found Mach-O, but not MH_EXECUTE, skipping.");
-        return 1;
-    }
-    DEBUG("Seems all good");
-    return 0;
-}
-
-static bool get_kernel_base_cb(vm_address_t addr)
-{
-    DEBUG("Candidate: " ADDR, addr);
-    return true; // accept first candidate
-}
-
-vm_address_t get_kernel_base(void)
-{
-    static vm_address_t kbase;
-    static bool initialized = false;
-    if(!initialized)
-    {
-        DEBUG("Getting kernel base address...");
-
-        vm_address_t ptr = foreach_ptr_to_base_region(&get_kernel_base_cb);
-        if(ptr == 0)
-        {
-            return 0;
-        }
-
-        // Can omit NULL check here because in that case,
-        // foreach_ptr_to_base_region() would've returned 0.
-        vm_address_t regstart = get_base_region()->addr;
-
-        DEBUG("Lowest pointer to base region: " ADDR, ptr);
-        for(vm_address_t addr = (ptr >> 20) << 20; addr >= regstart; addr -= 0x100000)
-        {
-            mach_hdr_t hdr;
-            vm_address_t haddr;
-
-            haddr = addr + 2 * IMAGE_OFFSET;
-            DEBUG("Looking for mach header at " ADDR "...", haddr);
-            if(kernel_read(haddr, sizeof(hdr), &hdr) != sizeof(hdr))
-            {
-                DEBUG("Kernel I/O error, returning 0.");
-                return 0;
-            }
-
-            uint8_t bad = is_kernel_header(&hdr);
-            if(bad == 1)
-            {
-                haddr = addr + IMAGE_OFFSET;
-                DEBUG("Looking for mach header at " ADDR "...", haddr);
-                if(kernel_read(haddr, sizeof(hdr), &hdr) != sizeof(hdr))
-                {
-                    DEBUG("Kernel I/O error, returning 0.");
-                    return 0;
-                }
-                bad = is_kernel_header(&hdr);
-                if(bad == 1)
-                {
-                    continue;
-                }
-            }
-            if(bad == 0)
-            {
-                DEBUG("Doing sanity-checks...");
-                void *cmds = malloc(hdr.sizeofcmds);
-                if(cmds == NULL)
-                {
-                    DEBUG("Memory allocation error, returning 0.");
-                    return 0;
-                }
-                if(kernel_read(haddr + sizeof(hdr), hdr.sizeofcmds, cmds) != hdr.sizeofcmds)
-                {
-                    DEBUG("Kernel I/O error, returning 0.");
-                    free(cmds);
-                    return 0;
-                }
-                bad = 2;
-                for(struct load_command *cmd = (struct load_command*)cmds, *end = (struct load_command*)&((char*)cmd)[hdr.sizeofcmds]; cmd < end; cmd = (struct load_command*)&((char*)cmd)[cmd->cmdsize])
-                {
-                    switch(cmd->cmd)
-                    {
-                        case MACH_LC_SEGMENT:
-                            {
-                                mach_seg_t *seg = (mach_seg_t*)cmd;
-                                if(seg->vmaddr >=
-#ifdef __LP64__
-                                    0xffffff0000000000
-#else
-                                    0x80000000
-#endif
-                                )
-                                {
-                                    break;
-                                }
-                                // else fall through
-                            }
-                        case LC_LOAD_DYLIB:
-                            DEBUG("Found userland binary, skipping.");
-                            free(cmds);
-                            goto next;
-                        case LC_UNIXTHREAD:
-                            bad = 0;
-                            break;
-                    }
-                }
-                free(cmds);
-            }
-            if(bad >= 2)
-            {
-                DEBUG("Bad header, returning 0.");
-                return 0;
-            }
-            DEBUG("Got kernel base address, caching it.");
-            kbase = haddr;
-            initialized = true;
-            DEBUG("kernel_base = " ADDR, kbase);
-            break;
-
-            next:;
-        }
-    }
-    return kbase;
-}
-#endif
 
 // true = continue, false = abort
 typedef bool (*kernel_region_callback_t) (vm_address_t, vm_size_t, vm_region_submap_info_data_64_t*, void*);
@@ -495,140 +190,320 @@ static bool foreach_kernel_region(kernel_region_callback_t cb, void *arg)
     return true;
 }
 
-#define CB_NUM_VTABS 2
+typedef struct
+{
+    char magic[16];
+    uint32_t segoff;
+    uint32_t nsegs;
+    uint32_t _unused32[2];
+    uint64_t _unused64[5];
+    uint64_t localoff;
+    uint64_t nlocals;
+} dysc_hdr_t;
 
 typedef struct
 {
-    vm_address_t regstart;
-    vm_address_t regend;
-    vm_address_t vtab[CB_NUM_VTABS]; // OSString, OSSymbol
-    vm_address_t lowest;
-} get_kernel_base_ios9_cb_args_t;
+    uint64_t addr;
+    uint64_t size;
+    uint64_t fileoff;
+    vm_prot_t maxprot;
+    vm_prot_t initprot;
+} dysc_seg_t;
 
 typedef struct
 {
-    vm_address_t vtab;
-    int          retainCount;
-    unsigned int flags;
-    unsigned int length;
-    vm_address_t string;
-} OSString9;
+    uint32_t nlistOffset;
+    uint32_t nlistCount;
+    uint32_t stringsOffset;
+    uint32_t stringsSize;
+    uint32_t entriesOffset;
+    uint32_t entriesCount;
+} dysc_local_info_t;
 
 typedef struct
 {
-    vm_address_t vtab;
-    int          retainCount;
-    unsigned int flags:14;
-    unsigned int length:18;
-    vm_address_t string;
-} OSString10;
+    uint32_t dylibOffset;
+    uint32_t nlistStartIndex;
+    uint32_t nlistCount;
+} dysc_local_entry_t;
 
 enum
 {
-    kOSStringNoCopy = 0x00000001,
+    kOSSerializeDictionary      = 0x01000000U,
+    kOSSerializeArray           = 0x02000000U,
+    kOSSerializeSet             = 0x03000000U,
+    kOSSerializeNumber          = 0x04000000U,
+    kOSSerializeSymbol          = 0x08000000U,
+    kOSSerializeString          = 0x09000000U,
+    kOSSerializeData            = 0x0a000000U,
+    kOSSerializeBoolean         = 0x0b000000U,
+    kOSSerializeObject          = 0x0c000000U,
+
+    kOSSerializeTypeMask        = 0x7F000000U,
+    kOSSerializeDataMask        = 0x00FFFFFFU,
+
+    kOSSerializeEndCollection   = 0x80000000U,
+
+    kOSSerializeMagic           = 0x000000d3U,
 };
 
-#define VM_KERN_MEMORY_ZONE 12
+static mach_port_t libkern_allocate(vm_size_t size)
+{
+    mach_port_t port = MACH_PORT_NULL;
+    void *IOKit = NULL;
+#ifdef __LP64__
+    int fd = 0;
+    void *cache = NULL;
+    struct stat s = {0};
+#endif
+
+    mach_port_t master = MACH_PORT_NULL;
+    kern_return_t ret = host_get_io_master(mach_host_self(), &master);
+    if(ret != KERN_SUCCESS)
+    {
+        DEBUG("Failed to get IOKit master port: %s", mach_error_string(ret));
+        goto out;
+    }
+
+    IOKit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY | RTLD_LOCAL | RTLD_FIRST);
+    if(IOKit == NULL)
+    {
+        DEBUG("Failed to load IOKit.");
+        goto out;
+    }
+
+    // Ye olde MIG
+    kern_return_t (*io_service_add_notification_ool)(mach_port_t, const char*, void*, mach_msg_type_number_t, mach_port_t, void*, mach_msg_type_number_t, kern_return_t*, mach_port_t*) = NULL;
+#ifdef __LP64__
+    // 64-bit IOKit doesn't export the MIG function, but still has a symbol for it.
+    // We go through all this trouble rather than statically linking against MIG because
+    // that becomes incompatible every now and then, while IOKit is always up to date.
+
+    fd = open("/System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64", O_RDONLY);
+    if(fd == -1)
+    {
+        DEBUG("Failed to open dyld_shared_cache_arm64 for reading: %s", strerror(errno));
+        goto out;
+    }
+    if(fstat(fd, &s) != 0)
+    {
+        DEBUG("Failed to stat(dyld_shared_cache_arm64): %s", strerror(errno));
+        goto out;
+    }
+    cache = mmap(NULL, s.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    if(cache == MAP_FAILED)
+    {
+        DEBUG("Failed to map dyld_shared_cache_arm64 to memory: %s", strerror(errno));
+        goto out;
+    }
+    uintptr_t cache_base = (uintptr_t)cache;
+
+    char *IOServiceOpen = dlsym(IOKit, "IOServiceOpen"); // char for pointer arithmetic
+    if(IOServiceOpen == NULL)
+    {
+        DEBUG("Failed to find IOServiceOpen.");
+        goto out;
+    }
+    dysc_hdr_t *cache_hdr = cache;
+    dysc_local_info_t *local_info = (dysc_local_info_t*)(cache_base + cache_hdr->localoff);
+    dysc_local_entry_t *local_entries = (dysc_local_entry_t*)((uintptr_t)local_info + local_info->entriesOffset);
+    DEBUG("cache_hdr: " ADDR ", local_info: " ADDR ", local_entries: " ADDR, (uintptr_t)cache_hdr, (uintptr_t)local_info, (uintptr_t)local_entries);
+    dysc_local_entry_t *local_entry = NULL;
+    mach_hdr_t *IOKit_hdr = NULL;
+    struct nlist_64 *symtab       = NULL,
+                    *local_symtab = (struct nlist_64*)((uintptr_t)local_info + local_info->nlistOffset);
+    const char      *strtab       = NULL,
+                    *local_strtab = (const char*)((uintptr_t)local_info + local_info->stringsOffset);
+    for(size_t i = 0; i < local_info->entriesCount; ++i)
+    {
+        mach_hdr_t *dylib_hdr = (mach_hdr_t*)(cache_base + local_entries[i].dylibOffset);
+        CMD_ITERATE(dylib_hdr, cmd)
+        {
+            if(cmd->cmd == LC_ID_DYLIB && strcmp((char*)cmd + ((struct dylib_command*)cmd)->dylib.name.offset, "/System/Library/Frameworks/IOKit.framework/Versions/A/IOKit") == 0)
+            {
+                IOKit_hdr = dylib_hdr;
+                local_entry = &local_entries[i];
+                local_symtab = &local_symtab[local_entries[i].nlistStartIndex];
+                goto found;
+            }
+        }
+    }
+    DEBUG("Failed to find local symbols for IOKit.");
+    goto out;
+
+    found:;
+    DEBUG("IOKit header: " ADDR ", local_symtab: " ADDR ", local_strtab: " ADDR, (uintptr_t)IOKit_hdr, (uintptr_t)local_symtab, (uintptr_t)local_strtab);
+    struct symtab_command *symcmd = NULL;
+    CMD_ITERATE(IOKit_hdr, cmd)
+    {
+        if(cmd->cmd == LC_SYMTAB)
+        {
+            symcmd = (struct symtab_command*)cmd;
+            symtab = (struct nlist_64*)(cache_base + symcmd->symoff);
+            strtab = (const char*)(cache_base + symcmd->stroff);
+            break;
+        }
+    }
+    if(symcmd == NULL)
+    {
+        DEBUG("Failed to find IOKit symtab.");
+        goto out;
+    }
+    uintptr_t addr_IOServiceOpen = 0,
+              addr_io_service_add_notification_ool = 0;
+    for(size_t i = 0; i < symcmd->nsyms; ++i)
+    {
+        const char *name = &strtab[symtab[i].n_un.n_strx];
+        if(strcmp(name, "_IOServiceOpen") == 0)
+        {
+            addr_IOServiceOpen = symtab[i].n_value;
+            break;
+        }
+    }
+    for(size_t i = 0; i < local_entry->nlistCount; ++i)
+    {
+        const char *name = &local_strtab[local_symtab[i].n_un.n_strx];
+        if(strcmp(name, "_io_service_add_notification_ool") == 0)
+        {
+            addr_io_service_add_notification_ool = local_symtab[i].n_value;
+            break;
+        }
+    }
+    DEBUG("IOServiceOpen: " ADDR, addr_IOServiceOpen);
+    DEBUG("io_service_add_notification_ool: " ADDR, addr_io_service_add_notification_ool);
+    if(addr_IOServiceOpen == 0 || addr_io_service_add_notification_ool == 0)
+    {
+        goto out;
+    }
+    io_service_add_notification_ool = (void*)(IOServiceOpen - addr_IOServiceOpen + addr_io_service_add_notification_ool);
+#else
+    // 32-bit just exports the function
+    io_service_add_notification_ool = dlsym(IOKit, "io_service_add_notification_ool");
+    if(io_service_add_notification_ool == NULL)
+    {
+        DEBUG("Failed to find io_service_add_notification_ool.");
+        goto out;
+    }
+#endif
+
+    uint32_t dict[] =
+    {
+        kOSSerializeMagic,
+        kOSSerializeEndCollection | kOSSerializeDictionary | (size / (2 * sizeof(void*))),
+        kOSSerializeSymbol | 4,
+        0x636261, // "abc"
+        kOSSerializeEndCollection | kOSSerializeBoolean | 1,
+    };
+    kern_return_t err;
+    ret = io_service_add_notification_ool(master, "IOServiceTerminate", dict, sizeof(dict), MACH_PORT_NULL, NULL, 0, &err, &port);
+    if(ret == KERN_SUCCESS)
+    {
+        ret = err;
+    }
+    if(ret != KERN_SUCCESS)
+    {
+        DEBUG("Failed to create IONotification: %s", mach_error_string(ret));
+        port = MACH_PORT_NULL; // Just in case
+        goto out;
+    }
+
+    out:;
+    if(IOKit != NULL)
+    {
+        dlclose(IOKit);
+    }
+#ifdef __LP64__
+    if(cache != NULL)
+    {
+        munmap(cache, s.st_size);
+    }
+    if(fd != 0 )
+    {
+        close(fd);
+    }
+#endif
+    return port;
+}
+
+typedef struct
+{
+    uint32_t num_of_size[16];
+    vm_size_t page_size;
+    vm_size_t alloc_size;
+    vm_address_t vtab;
+} get_kernel_base_ios9_cb_args_t;
+
+// Memory tag
+#define VM_KERN_MEMORY_LIBKERN 4
+
+// Amount of pages that are too large for zalloc
+#define KALLOC_DIRECT_THRESHOLD 3
+
+static bool count_libkern_allocations(vm_address_t addr, vm_size_t size, vm_region_submap_info_data_64_t *info, void *arg)
+{
+    get_kernel_base_ios9_cb_args_t *args = arg;
+    if(info->user_tag == VM_KERN_MEMORY_LIBKERN)
+    {
+        DEBUG("Found libkern region " ADDR "-" ADDR "...", addr, addr + size);
+        size_t idx = (size + args->page_size - 1) / args->page_size;
+        if(idx < KALLOC_DIRECT_THRESHOLD)
+        {
+            DEBUG("Too small, skipping...");
+        }
+        else
+        {
+            idx -= KALLOC_DIRECT_THRESHOLD;
+            if(idx >= sizeof(args->num_of_size)/sizeof(args->num_of_size[0]))
+            {
+                DEBUG("Too large, skipping...");
+            }
+            else
+            {
+                ++(args->num_of_size[idx]);
+            }
+        }
+    }
+    return true;
+}
 
 static bool get_kernel_base_ios9_cb(vm_address_t addr, vm_size_t size, vm_region_submap_info_data_64_t *info, void *arg)
 {
     get_kernel_base_ios9_cb_args_t *args = arg;
-    if(info->user_tag == VM_KERN_MEMORY_ZONE)
+    if(info->user_tag == VM_KERN_MEMORY_LIBKERN && size == args->alloc_size)
     {
-        DEBUG("Found zalloc region " ADDR "-" ADDR ", dumping and scanning it...", addr, addr + size);
-        char *mem = malloc(size);
-        if(mem == NULL)
-        {
-            DEBUG("Memory allocation error, aborting.");
-            return false;
-        }
-        if(kernel_read(addr, size, mem) != size)
+        DEBUG("Found matching libkern region " ADDR "-" ADDR ", dumping it...", addr, addr + size);
+        vm_address_t obj = 0;
+        if(kernel_read(addr, sizeof(void*), &obj) != sizeof(void*))
         {
             DEBUG("Kernel I/O error, aborting.");
-            free(mem);
             return false;
         }
-
-        for(size_t off = 0; off < size - sizeof(OSString9); off += sizeof(vm_address_t))
+        DEBUG("Found object: " ADDR, obj);
+        if(obj < KERNEL_SPACE)
         {
-            vm_address_t vtab;
-            int          retainCount;
-            unsigned int flags;
-            unsigned int length;
-            vm_address_t string;
-            if(kCFCoreFoundationVersionNumber > HAVE_REFACTORED_OSSTRING)
-            {
-                OSString10 *osstr = (OSString10*)(&mem[off]);
-                vtab        = osstr->vtab;
-                retainCount = osstr->retainCount;
-                flags       = osstr->flags;
-                length      = osstr->length;
-                string      = osstr->string;
-            }
-            else
-            {
-                OSString9 *osstr = (OSString9*)(&mem[off]);
-                vtab        = osstr->vtab;
-                retainCount = osstr->retainCount;
-                flags       = osstr->flags;
-                length      = osstr->length;
-                string      = osstr->string;
-            }
-            if
-            (
-                retainCount == 0x10001                           && // 0x10000 is a tag, not the actual count
-                flags == kOSStringNoCopy                         && // referenced, not copied
-                length > 6              && length < 100          && // reasonable length
-                vtab   > args->regstart && vtab   < args->regend && // vtab within base region
-                string > args->regstart && string < args->regend    // string within base region
-            )
-            {
-                DEBUG("Found OSString at " ADDR, (vm_address_t)(addr + off));
-                if(verbose)
-                {
-                    fprintf(stderr, "OSString:\n"
-                                    "{\n"
-                                    "    vtab         = " ADDR "\n"
-                                    "    retainCount  = %d\n"
-                                    "    flags        = %u\n"
-                                    "    length       = %u\n"
-                                    "    string       = " ADDR "\n"
-                                    "}\n"
-                                    , vtab, retainCount, flags, length, string);
-                }
-                for(size_t i = 0; i < CB_NUM_VTABS; ++i)
-                {
-                    if(args->vtab[i] == 0)
-                    {
-                        DEBUG("Adding vtab to list...");
-                        args->vtab[i] = vtab;
-                        goto good;
-                    }
-                    else if(args->vtab[i] == vtab)
-                    {
-                        DEBUG("Known vtab, skipping.");
-                        goto good;
-                    }
-                }
-                DEBUG("Found more than %u different vtabs, aborting.", CB_NUM_VTABS);
-                free(mem);
-                return false;
-
-                good:;
-                vm_address_t lower = vtab > string ? string : vtab;
-                if(args->lowest == 0 || args->lowest > lower)
-                {
-                    args->lowest = lower;
-                }
-            }
+            return false;
         }
-        free(mem);
+        vm_address_t vtab = 0;
+        if(kernel_read(obj, sizeof(void*), &vtab) != sizeof(void*))
+        {
+            DEBUG("Kernel I/O error, aborting.");
+            return false;
+        }
+        DEBUG("Found vtab: " ADDR, vtab);
+        if(vtab < KERNEL_SPACE)
+        {
+            return false;
+        }
+        args->vtab = vtab;
+        return false; // just to short-circuit, we ignore the return value in the calling func
     }
     return true;
 }
 
 static vm_address_t get_kernel_base_ios9(vm_address_t regstart, vm_address_t regend)
 {
+#if 0
+XXX
     get_kernel_base_ios9_cb_args_t args =
     {
         .regstart = regstart,
@@ -645,9 +520,59 @@ static vm_address_t get_kernel_base_ios9(vm_address_t regstart, vm_address_t reg
         DEBUG("Failed to find any OSString, returning 0.");
         return 0;
     }
+#endif
+    get_kernel_base_ios9_cb_args_t args =
+    {
+        .num_of_size = {0},
+        .page_size = 0,
+        .alloc_size = 0,
+        .vtab = 0,
+    };
 
-    DEBUG("Starting at " ADDR ", searching backwards...", args.lowest);
-    for(vm_address_t addr = ((args.lowest >> 20) << 20) +
+    host_t host = mach_host_self();
+    kern_return_t ret = host_page_size(host, &args.page_size);
+    if(ret != KERN_SUCCESS)
+    {
+        DEBUG("Failed to get host page size: %s", mach_error_string(ret));
+        return 0;
+    }
+
+    DEBUG("Enumerating libkern allocations...");
+    if(!foreach_kernel_region(&count_libkern_allocations, &args))
+    {
+        return 0;
+    }
+    for(size_t i = 0; i < sizeof(args.num_of_size)/sizeof(args.num_of_size[0]); ++i)
+    {
+        if(args.num_of_size[i] == 0)
+        {
+            args.alloc_size = (i + KALLOC_DIRECT_THRESHOLD) * args.page_size;
+            break;
+        }
+    }
+    if(args.alloc_size == 0)
+    {
+        DEBUG("Failed to find a suitable size for injection, returning 0.");
+        return 0;
+    }
+
+    DEBUG("Making allocation of size " SIZE "...", args.alloc_size);
+    mach_port_t port = libkern_allocate(args.alloc_size);
+    if(port == MACH_PORT_NULL)
+    {
+        return 0;
+    }
+    foreach_kernel_region(&get_kernel_base_ios9_cb, &args); // don't care about return value
+    mach_port_deallocate(mach_task_self(), port);
+
+    if(args.vtab == 0)
+    {
+        DEBUG("Failed to get any vtab, returning 0.");
+        return 0;
+    }
+
+    DEBUG("Starting at " ADDR ", searching backwards...", args.vtab);
+    for(vm_address_t addr = (args.vtab & ~0xfffff) +
 #ifdef __LP64__
             2 * IMAGE_OFFSET    // 0x4000 for 64-bit on >=9.0
 #else
