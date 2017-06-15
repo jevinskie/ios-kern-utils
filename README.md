@@ -28,12 +28,14 @@ The latest release of these tools is confirmed to work with:
 * TaiG on 8.4
 * Pangu9 on 9.1
 * [qwertyoruiop's jailbreakme](https://jbme.qwertyoruiop.com/) on 9.3.x
+* extra_recipe on 10.0-10.2
 * Yalu102 (beta4 or later) on 10.0.1-10.2
 
 Jailbreaks that **DO NOT** seem to enable `tfp0`, and thus **DO NOT** work with kern-utils:
 
 * Pangu9 on 9.0.x (but can be enabled with [cl0ver](https://github.com/Siguza/cl0ver))
 * Pangu9 on 9.2-9.3.3 (but see qwertyoruiop's jailbreakme)
+* YaluX on 10.0.1-10.1.1
 
 If you have information about how the kernel task port can be obtained in these versions, please [open a ticket](https://github.com/Siguza/ios-kern-utils/issues/new) and tell me.
 
