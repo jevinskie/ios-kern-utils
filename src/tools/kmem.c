@@ -56,7 +56,7 @@ static void hexdump(unsigned char *data, size_t size)
 
 static void print_usage(const char *self)
 {
-    fprintf(stderr, "Usage: %s [-r] [-u] [-h] addr length\n"
+    fprintf(stderr, "Usage: %s [-r] [-h] addr length\n"
                     "0x for hex, no prefix for decimal\n"
                     "\n"
                     "Options:\n"
