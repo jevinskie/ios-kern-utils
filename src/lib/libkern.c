@@ -19,9 +19,7 @@
 #include <sys/mman.h>           // mmap, munmap, MAP_FAILED
 #include <sys/stat.h>           // fstat, struct stat
 
-#include <CoreFoundation/CoreFoundation.h> // CF*
-
-#include "arch.h"               // IMAGE_OFFSET, MACH_TYPE, MACH_HEADER_MAGIC, mach_hdr_t
+#include "arch.h"               // TARGET_MACOS, IMAGE_OFFSET, MACH_TYPE, MACH_HEADER_MAGIC, mach_hdr_t
 #include "debug.h"              // DEBUG
 #include "mach-o.h"             // CMD_ITERATE
 
@@ -67,9 +65,62 @@ kern_return_t get_kernel_task(task_t *task)
         DEBUG("Getting kernel task...");
         kern_return_t ret;
         kernel_task = MACH_PORT_NULL;
+#ifdef TARGET_MACOS
+        // Huge props to Jonathan Levin for this method!
+        // Who needs task_for_pid anyway? :P
+        DEBUG("Trying processor_set_tasks()...");
+        host_t host = mach_host_self();
+        mach_port_t name = MACH_PORT_NULL,
+                    priv = MACH_PORT_NULL;
+        DEBUG("Getting default processor set name port...");
+        ret = processor_set_default(host, &name);
+        VERIFY_PORT(name, ret);
+        if(ret == KERN_SUCCESS)
+        {
+            DEBUG("Getting default processor set priv port...");
+            ret = host_processor_set_priv(host, name, &priv);
+            VERIFY_PORT(priv, ret);
+            if(ret == KERN_SUCCESS)
+            {
+                DEBUG("Getting processor tasks...");
+                task_array_t tasks;
+                mach_msg_type_number_t num;
+                ret = processor_set_tasks(priv, &tasks, &num);
+                if(ret != KERN_SUCCESS)
+                {
+                    DEBUG("Failed: %s", mach_error_string(ret));
+                }
+                else
+                {
+                    DEBUG("Got %u tasks, looking for kernel task...", num);
+                    for(size_t i = 0; i < num; ++i)
+                    {
+                        int pid = 0;
+                        ret = pid_for_task(tasks[i], &pid);
+                        if(ret != KERN_SUCCESS)
+                        {
+                            DEBUG("Failed to get pid for task %lu (%08x): %s", i, tasks[i], mach_error_string(ret));
+                            break;
+                        }
+                        else if(pid == 0)
+                        {
+                            kernel_task = tasks[i];
+                            break;
+                        }
+                    }
+                    if(kernel_task == MACH_PORT_NULL)
+                    {
+                        DEBUG("Kernel task is not in set.");
+                        ret = KERN_FAILURE;
+                    }
+                }
+            }
+        }
+#else
         DEBUG("Trying task_for_pid(0)...");
         ret = task_for_pid(mach_task_self(), 0, &kernel_task);
         VERIFY_PORT(kernel_task, ret);
+#endif
         if(ret != KERN_SUCCESS)
         {
             // Try Pangu's special port
@@ -502,25 +553,6 @@ static bool get_kernel_base_ios9_cb(vm_address_t addr, vm_size_t size, vm_region
 
 static vm_address_t get_kernel_base_ios9(vm_address_t regstart, vm_address_t regend)
 {
-#if 0
-XXX
-    get_kernel_base_ios9_cb_args_t args =
-    {
-        .regstart = regstart,
-        .regend = regend,
-        .vtab = {0},
-        .lowest = 0,
-    };
-    if(!foreach_kernel_region(&get_kernel_base_ios9_cb, &args))
-    {
-        return 0;
-    }
-    if(args.lowest == 0)
-    {
-        DEBUG("Failed to find any OSString, returning 0.");
-        return 0;
-    }
-#endif
     get_kernel_base_ios9_cb_args_t args =
     {
         .num_of_size = {0},
@@ -573,10 +605,14 @@ XXX
 
     DEBUG("Starting at " ADDR ", searching backwards...", args.vtab);
     for(vm_address_t addr = (args.vtab & ~0xfffff) +
-#ifdef __LP64__
-            2 * IMAGE_OFFSET    // 0x4000 for 64-bit on >=9.0
+#if TARGET_OSX
+            0                   // no offset for macOS
 #else
+#   ifdef __LP64__
+            2 * IMAGE_OFFSET    // 0x4000 for 64-bit on >=9.0
+#   else
             IMAGE_OFFSET        // 0x1000 for 32-bit, regardless of OS version
+#   endif
 #endif
         ; addr > regstart; addr -= 0x100000)
     {
@@ -635,9 +671,13 @@ static bool get_kernel_base_cb(vm_address_t addr, vm_size_t size, vm_region_subm
     if
     (
         (info->protection & (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE)) == 0 &&
+#ifdef TARGET_MACOS
+        addr ==     0xffffff8000000000 &&
+#else
         size >          1024*1024*1024 &&
-#ifdef __LP64__
+#   ifdef __LP64__
         size <= 16ULL * 1024*1024*1024 && // this is always true for 32-bit
+#   endif
 #endif
         info->share_mode == SM_EMPTY
     )
@@ -688,7 +728,7 @@ vm_address_t get_kernel_base(void)
         }
         DEBUG("Base region is at " ADDR "-" ADDR ".", args.regstart, args.regend);
 
-        vm_address_t addr = kCFCoreFoundationVersionNumber <= HAVE_TAGGED_REGIONS ? get_kernel_base_ios8(args.regstart) : get_kernel_base_ios9(args.regstart, args.regend);
+        vm_address_t addr = HAVE_TAGGED_REGIONS ? get_kernel_base_ios8(args.regstart) : get_kernel_base_ios9(args.regstart, args.regend);
         if(addr == 0)
         {
             return 0;

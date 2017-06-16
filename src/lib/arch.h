@@ -8,14 +8,30 @@
 #ifndef ARCH_H
 #define ARCH_H
 
+#include <TargetConditionals.h> // TARGET_OS_IPHONE
 #include <mach-o/loader.h>      // mach_header, mach_header_64, segment_command, segment_command_64
 
-#define HAVE_TAGGED_REGIONS kCFCoreFoundationVersionNumber_iOS_8_x_Max
-#define HAVE_REFACTORED_OSSTRING kCFCoreFoundationVersionNumber_iOS_9_x_Max
+#include <CoreFoundation/CoreFoundation.h> // kCFCoreFoundationVersionNumber
+
+#ifndef TARGET_OS_IPHONE
+#   error "TARGET_OS_IPHONE not defined"
+#endif
+
+#if !(TARGET_OS_IPHONE)
+#   define TARGET_MACOS
+#endif
+
+// 1199 = kCFCoreFoundationVersionNumber_iOS_8_x_Max or kCFCoreFoundationVersionNumber10_10_Max
+#define HAVE_TAGGED_REGIONS (kCFCoreFoundationVersionNumber <= 1199)
 
 #if __LP64__
-#   define IMAGE_OFFSET 0x2000
-#   define MACH_TYPE CPU_TYPE_ARM64
+#   ifdef TARGET_MACOS
+#       define IMAGE_OFFSET 0
+#       define MACH_TYPE CPU_TYPE_X86_64
+#   else
+#       define IMAGE_OFFSET 0x2000
+#       define MACH_TYPE CPU_TYPE_ARM64
+#   endif
 #   define ADDR "%016lx"
 #   define SIZE "%lu"
 #   define MACH_HEADER_MAGIC MH_MAGIC_64
@@ -25,8 +41,12 @@
     typedef struct segment_command_64 mach_seg_t;
     typedef struct section_64 mach_sec_t;
 #else
-#   define IMAGE_OFFSET 0x1000
-#   define MACH_TYPE CPU_TYPE_ARM
+#   ifdef TARGET_MACOS
+#       error "Unsupported architecture"
+#   else
+#       define IMAGE_OFFSET 0x1000
+#       define MACH_TYPE CPU_TYPE_ARM
+#   endif
 #   define ADDR "%08x"
 #   define SIZE "%u"
 #   define MACH_HEADER_MAGIC MH_MAGIC

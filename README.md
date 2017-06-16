@@ -110,6 +110,19 @@ For `make` you may also specify the following environment variables:
     </tr>
 </table>
 
+### macOS
+
+As of late, kern-utils can also be compiled for and used on macOS.  
+Compile with:
+
+    IGCC=gcc IGCC_ARCH='-arch x86_64' SIGN=true STRIP=strip LIBTOOL=libtool make clean all
+
+The `SIGN=true` is a dirty hack to skip signing, which is necessary because Sierra and later will not allow self-signed binaries with restricted entitlements to run. However, entitlements aren't needed on macOS since the kernel task port is obtained via a different API [very much thanks to Jonathan Levin](http://newosxbook.com/articles/PST2.html).
+
+In order to use kern-utils, SIP needs to be at least partially disabled. If you don't want to disable it completely, you can use:
+
+    csrutil enable --without debug
+
 ### License
 
 [MIT](https://github.com/Siguza/cl0ver/blob/master/LICENSE).
