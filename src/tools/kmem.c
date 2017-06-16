@@ -8,7 +8,7 @@
 #include <errno.h>              // errno
 #include <stdbool.h>            // bool, true, false
 #include <stdio.h>              // printf, fprintf
-#include <stdlib.h>             // free, malloc, strtoul
+#include <stdlib.h>             // free, malloc, strtoull
 #include <string.h>             // memset, strlen
 #include <unistd.h>             // getopt, write, STDOUT_FILENO
 
@@ -100,18 +100,18 @@ int main(int argc, char **argv)
     // addr
     errno = 0;
     addr = strtoull(argv[optind], &end, 0);
-    if(argv[optind] == '\0' || *end != '\0' || errno != 0)
+    if(argv[optind][0] == '\0' || end[0] != '\0' || errno != 0)
     {
-        fprintf(stderr, "[!] Failed to parse argument: %s\n", argv[optind] == '\0' ? "zero characters gives" : strerror(errno));
+        fprintf(stderr, "[!] Failed to parse \"%s\": %s\n", argv[optind], argv[optind][0] == '\0' ? "zero characters given" : strerror(errno));
         return -1;
     }
 
     // size
     errno = 0;
     size = strtoull(argv[optind + 1], &end, 0);
-    if(argv[optind + 1] == '\0' || *end != '\0' || errno != 0)
+    if(argv[optind + 1][0] == '\0' || end[0] != '\0' || errno != 0)
     {
-        fprintf(stderr, "[!] Failed to parse argument: %s\n", argv[optind + 1] == '\0' ? "zero characters gives" : strerror(errno));
+        fprintf(stderr, "[!] Failed to parse \"%s\": %s\n", argv[optind + 1], argv[optind + 1][0] == '\0' ? "zero characters given" : strerror(errno));
         return -1;
     }
     if(size == 0)
