@@ -124,11 +124,77 @@ int main(int argc, const char **argv)
     vm_size_t len = 0;
     if(file)
     {
-        //FILE *f = fopen();
+        FILE *f = fopen(argv[argc - 1], "r");
+        if(f == NULL)
+        {
+            fprintf(stderr, "[!] Failed to open \"%s\": %s\n", argv[argc - 1], strerror(errno));
+            return -1;
+        }
+        if(fseek(f, 0, SEEK_END) != 0)
+        {
+            fprintf(stderr, "[!] fseek(SEEK_END) failed: %s\n", strerror(errno));
+            return -1;
+        }
+        long off = ftell(f);
+        if(off == -1)
+        {
+            fprintf(stderr, "[!] Failed to get stream position: %s\n", strerror(errno));
+            return -1;
+        }
+        if(fseek(f, 0, SEEK_SET) != 0)
+        {
+            fprintf(stderr, "[!] fseek(SEEK_SET) failed: %s\n", strerror(errno));
+            return -1;
+        }
+        len = off;
+        patch = malloc(len);
+        if(patch == NULL)
+        {
+            fprintf(stderr, "[!] Failed to allocate memory: %s\n", strerror(errno));
+            return -1;
+        }
+        if(fread(patch, len, 1, f) != 1)
+        {
+            fprintf(stderr, "[!] Failed to read from file: %s\n", strerror(errno));
+            return -1;
+        }
+        fclose(f);
     }
     else if(hex)
     {
-
+        size_t size = strlen(argv[argc - 1]);
+        if(size % 2 != 0)
+        {
+            fprintf(stderr, "[!] Hex string must have even number of chars\n");
+            return -1;
+        }
+        len = size / 2;
+        patch = malloc(len);
+        if(patch == NULL)
+        {
+            fprintf(stderr, "[!] Failed to allocate memory: %s\n", strerror(errno));
+            return -1;
+        }
+        for(size_t i = 0; i < len; ++i)
+        {
+            char c = argv[argc - 1][2*i    ],
+                 d = argv[argc - 1][2*i + 1];
+#define check(digit) \
+do \
+{ \
+    if(((digit) < '0' || (digit) > '9') && ((digit) < 'a' || (digit) > 'f') && ((digit) < 'A' || (digit) > 'F')) \
+    { \
+        fprintf(stderr, "[!] Invalid hex digit: %c\n", (digit)); \
+        return -1; \
+    } \
+} while(0)
+#define parse(digit) ((digit) - (((digit) >= '0' && (digit) <= '9') ? '0' : (((digit) >= 'a' && (digit) <= 'f') ? 'a' : 'A')))
+            check(c);
+            check(d);
+            ((uint8_t*)patch)[i] = (parse(c) << 4) | parse(d);
+#undef check
+#undef parse
+        }
     }
     else if(wide || quad)
     {
@@ -161,6 +227,11 @@ int main(int argc, const char **argv)
     {
         fprintf(stderr, "[!] Error, wrote " SIZE " bytes instead of " SIZE "\n", written, len);
         return -1;
+    }
+
+    if(file || hex)
+    {
+        free(patch);
     }
 
     fprintf(stderr, "[*] Done\n");
