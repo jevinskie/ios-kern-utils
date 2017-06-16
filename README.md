@@ -90,6 +90,13 @@ For `make` you may also specify the following environment variables:
         <td align="center" colspan="3"><i>none</i></td>
     </tr>
     <tr>
+        <td align="center"><code>LIBTOOL</code></td>
+        <td align="center">Archive manipulation utility</td>
+        <td align="center"><code>xcrun -sdk iphoneos libtool</code></td>
+        <td align="center"><code>libtool</code></td>
+        <td align="center"><code>ios-libtool</code></td>
+    </tr>
+    <tr>
         <td align="center"><code>STRIP</code></td>
         <td align="center">Symbol remover utility</td>
         <td align="center"><code>xcrun -sdk iphoneos strip</code></td>

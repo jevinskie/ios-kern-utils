@@ -28,17 +28,7 @@ endif
 ifndef IGCC_ARCH
 	IGCC_ARCH = -arch armv7 -arch arm64 -miphoneos-version-min=6.0
 endif
-ifndef STRIP
-	ifeq ($(shell uname -s),Darwin)
-		ifneq ($(HOSTTYPE),arm)
-			STRIP = xcrun -sdk iphoneos strip
-		else
-			STRIP = $(shell which strip 2>/dev/null)
-		endif
-	else
-		STRIP := $(shell which ios-strip 2>/dev/null)
-	endif
-endif
+# We need libtool here because ar can't deal with fat libraries
 ifndef LIBTOOL
 	ifeq ($(shell uname -s),Darwin)
 		ifneq ($(HOSTTYPE),arm)
@@ -48,6 +38,17 @@ ifndef LIBTOOL
 		endif
 	else
 		LIBTOOL = ios-libtool
+	endif
+endif
+ifndef STRIP
+	ifeq ($(shell uname -s),Darwin)
+		ifneq ($(HOSTTYPE),arm)
+			STRIP = xcrun -sdk iphoneos strip
+		else
+			STRIP = $(shell which strip 2>/dev/null)
+		endif
+	else
+		STRIP := $(shell which ios-strip 2>/dev/null)
 	endif
 endif
 ifndef SIGN
