@@ -95,7 +95,7 @@ int main(int argc, const char **argv)
     {
         if(sum != 0)
         {
-            fprintf(stderr, "[!] More than one action given.\n\n");
+            fprintf(stderr, "[!] More than one action given\n\n");
         }
         print_usage(argv[0]);
         return sum == 0 ? 0 : -1;
@@ -127,7 +127,7 @@ int main(int argc, const char **argv)
         FILE *f = fopen(argv[argc - 1], "r");
         if(f == NULL)
         {
-            fprintf(stderr, "[!] Failed to open \"%s\": %s\n", argv[argc - 1], strerror(errno));
+            fprintf(stderr, "[!] Failed to open %s: %s\n", argv[argc - 1], strerror(errno));
             return -1;
         }
         if(fseek(f, 0, SEEK_END) != 0)

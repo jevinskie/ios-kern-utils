@@ -19,8 +19,6 @@
 #include "libkern.h"            // KERNEL_BASE_OR_GTFO, kernel_read
 #include "mach-o.h"             // CMD_ITERATE
 
-#define MAX_HEADER_SIZE 0x4000
-
 #define max(a, b) (a) > (b) ? (a) : (b)
 
 static void print_usage(const char *self)
@@ -38,9 +36,9 @@ int main(int argc, const char **argv)
     vm_address_t kbase;
     FILE* f;
     size_t filesize = 0;
-    unsigned char *buf,     // will hold the original mach-o header and load commands
-                  *header,  // header for the new mach-o file
-                  *binary;  // mach-o will be reconstructed in here
+    unsigned char *binary;
+    mach_hdr_t hdr_buf;
+    size_t hdr_size;
     mach_hdr_t *orig_hdr, *hdr;
     mach_seg_t *seg;
     const char *outfile = "kernel.bin";
@@ -86,19 +84,28 @@ int main(int argc, const char **argv)
     KERNEL_BASE_OR_GTFO(kbase);
     fprintf(stderr, "[*] Found kernel base at address 0x" ADDR "\n", kbase);
 
-    buf = malloc(MAX_HEADER_SIZE);
-    header = malloc(MAX_HEADER_SIZE);
-    if(buf == NULL || header == NULL)
+    if(kernel_read(kbase, sizeof(hdr_buf), &hdr_buf) != sizeof(hdr_buf))
     {
-        fprintf(stderr, "[!] Failed to allocate header buffer (%s)\n", strerror(errno));
+        fprintf(stderr, "[!] Kernel I/O error\n");
         return -1;
     }
-    memset(header, 0, MAX_HEADER_SIZE);
-    orig_hdr = (mach_hdr_t*)buf;
-    hdr = (mach_hdr_t*)header;
+    hdr_size = sizeof(hdr_buf) + hdr_buf.sizeofcmds;
+
+    orig_hdr = malloc(hdr_size);
+    hdr = malloc(hdr_size);
+    if(orig_hdr == NULL || hdr == NULL)
+    {
+        fprintf(stderr, "[!] Failed to allocate header buffer: %s\n", strerror(errno));
+        return -1;
+    }
+    memset(hdr, 0, hdr_size);
 
     fprintf(stderr, "[*] Reading kernel header...\n");
-    kernel_read(kbase, MAX_HEADER_SIZE, buf);
+    if(kernel_read(kbase, hdr_size, orig_hdr) != hdr_size)
+    {
+        fprintf(stderr, "[!] Kernel I/O error\n");
+        return -1;
+    }
     memcpy(hdr, orig_hdr, sizeof(*hdr));
     hdr->ncmds = 0;
     hdr->sizeofcmds = 0;
@@ -128,7 +135,7 @@ int main(int argc, const char **argv)
     binary = malloc(filesize);
     if(binary == NULL)
     {
-        fprintf(stderr, "[!] Failed to allocate dump buffer (%s)\n", strerror(errno));
+        fprintf(stderr, "[!] Failed to allocate dump buffer: %s\n", strerror(errno));
         return -1;
     }
     memset(binary, 0, filesize);
@@ -142,13 +149,20 @@ int main(int argc, const char **argv)
             case MACH_LC_SEGMENT:
                 seg = (mach_seg_t*)cmd;
                 fprintf(stderr, "[+] Found segment %s\n", seg->segname);
-                kernel_read(seg->vmaddr, seg->filesize, binary + seg->fileoff);
+                if(kernel_read(seg->vmaddr, seg->filesize, binary + seg->fileoff) != seg->filesize)
+                {
+                    fprintf(stderr, "[!] Kernel I/O error\n");
+                    return -1;
+                }
             case LC_UUID:
             case LC_UNIXTHREAD:
-            case 0x25:
-            case 0x2a:
-            case 0x26:
-                memcpy(header + sizeof(*hdr) + hdr->sizeofcmds, cmd, cmd->cmdsize);
+            case LC_SOURCE_VERSION:
+            case LC_FUNCTION_STARTS:
+            case LC_VERSION_MIN_MACOSX:
+            case LC_VERSION_MIN_IPHONEOS:
+            case 0x2f: // LC_VERSION_MIN_TVOS
+            case LC_VERSION_MIN_WATCHOS:
+                memcpy((char*)(hdr + 1) + hdr->sizeofcmds, cmd, cmd->cmdsize);
                 hdr->sizeofcmds += cmd->cmdsize;
                 hdr->ncmds++;
                 break;
@@ -156,13 +170,13 @@ int main(int argc, const char **argv)
     }
 
     // now replace the old header with the new one ...
-    memcpy(binary, header, sizeof(*hdr) + orig_hdr->sizeofcmds);
+    memcpy(binary, hdr, sizeof(*hdr) + orig_hdr->sizeofcmds);
 
     // ... and write the final binary to file
     f = fopen(outfile, "wb");
     if(f == NULL)
     {
-        fprintf(stderr, "[!] Failed to open %s for writing (%s)\n", outfile, strerror(errno));
+        fprintf(stderr, "[!] Failed to open %s for writing: %s\n", outfile, strerror(errno));
         return -1;
     }
     fwrite(binary, filesize, 1, f);
@@ -171,8 +185,8 @@ int main(int argc, const char **argv)
     fclose(f);
 
     free(binary);
-    free(header);
-    free(buf);
+    free(hdr);
+    free(orig_hdr);
 
     return 0;
 }
