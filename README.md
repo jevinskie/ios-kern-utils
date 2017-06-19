@@ -44,11 +44,11 @@ If you have information about how the kernel task port can be obtained in these 
 Name      | Function
 :-------: | :------------------------------------------------
 `kdump`   | Dump a running iOS kernel to a file
+`kinfo`   | Display various kernel information
 `kmap`    | Visualize the kernel address space
-`kpatch`  | Apply patches to a running kernel
 `kmem`    | Dump kernel memory to the console
-`khead`   | Parse and display the Mach-O header of the kernel
-`nvpatch` | Allow all NVRAM variables to be changed
+`kpatch`  | Apply patches to a running kernel
+`nvpatch` | Display and patch NVRAM variables permissions
 
 ### Building
 
