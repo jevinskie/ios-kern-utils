@@ -101,7 +101,7 @@ int main(int argc, const char **argv)
     unsigned int depth;
     size_t displaysize;
     char scale;
-    char curR, curW, curX, maxR, maxW, maxX;
+    char curA, curR, curW, curX, maxA, maxR, maxW, maxX;
 
     for(vm_address_t addr = 0; 1; addr += size)
     {
@@ -127,9 +127,11 @@ int main(int argc, const char **argv)
         }
 
         // protection
+        curA = (info.protection) & ~(VM_PROT_ALL) ? '+' : '-';
         curR = (info.protection) & VM_PROT_READ ? 'r' : '-';
         curW = (info.protection) & VM_PROT_WRITE ? 'w' : '-';
         curX = (info.protection) & VM_PROT_EXECUTE ? 'x' : '-';
+        maxA = (info.max_protection) & ~(VM_PROT_ALL) ? '+' : '-';
         maxR = (info.max_protection) & VM_PROT_READ ? 'r' : '-';
         maxW = (info.max_protection) & VM_PROT_WRITE ? 'w' : '-';
         maxX = (info.max_protection) & VM_PROT_EXECUTE ? 'x' : '-';
@@ -138,8 +140,8 @@ int main(int argc, const char **argv)
         {
             printf(ADDR "-" ADDR " [%5zu%c] %c%c%c%c/%c%c%c%c [%s %s %s] %016llx [%u %u %hu %hhu %hu] %08x/%08x:<%10u> %u,%u {%u,%u}\n"
                    , addr, addr+size, displaysize, scale
-                   , (info.protection     & ~(VM_PROT_ALL)) ? '+' : '-', curR, curW, curX
-                   , (info.max_protection & ~(VM_PROT_ALL)) ? '+' : '-', maxR, maxW, maxX
+                   , curA, curR, curW, curX
+                   , maxA, maxR, maxW, maxX
                    , info.is_submap ? "map" : depth > 0 ? "sub" : "mem", share_mode(info.share_mode), inheritance(info.inheritance), info.offset
                    , info.behavior, info.pages_reusable, info.user_wired_count, info.external_pager, info.shadow_depth // these should all be 0
                    , info.user_tag, info.object_id, info.ref_count

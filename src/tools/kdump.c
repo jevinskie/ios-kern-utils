@@ -160,7 +160,7 @@ int main(int argc, const char **argv)
             case LC_FUNCTION_STARTS:
             case LC_VERSION_MIN_MACOSX:
             case LC_VERSION_MIN_IPHONEOS:
-            case 0x2f: // LC_VERSION_MIN_TVOS
+            case LC_VERSION_MIN_TVOS:
             case LC_VERSION_MIN_WATCHOS:
                 memcpy((char*)(hdr + 1) + hdr->sizeofcmds, cmd, cmd->cmdsize);
                 hdr->sizeofcmds += cmd->cmdsize;
