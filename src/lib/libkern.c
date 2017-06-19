@@ -11,13 +11,13 @@
 #include <stdlib.h>             // free, malloc, random, srandom
 #include <string.h>             // memmem
 #include <time.h>               // time
-#include <unistd.h>             // getpid
 
 #include <mach/mach.h>          // Everything mach
 #include <mach-o/loader.h>      // MH_EXECUTE
 #include <mach-o/nlist.h>       // struct nlist_64
 #include <sys/mman.h>           // mmap, munmap, MAP_FAILED
 #include <sys/stat.h>           // fstat, struct stat
+#include <sys/syscall.h>        // syscall
 
 #include "arch.h"               // TARGET_MACOS, IMAGE_OFFSET, MACH_TYPE, MACH_HEADER_MAGIC, mach_hdr_t
 #include "debug.h"              // DEBUG
@@ -298,11 +298,13 @@ enum
     kOSSerializeMagic           = 0x000000d3U,
 };
 
+#define IOKIT_PATH "/System/Library/Frameworks/IOKit.framework/Versions/A/IOKit"
+
 static mach_port_t libkern_allocate(vm_size_t size)
 {
     mach_port_t port = MACH_PORT_NULL;
     void *IOKit = NULL;
-#ifdef __LP64__
+#if defined(__LP64__) && !defined(TARGET_MACOS)
     int fd = 0;
     void *cache = NULL;
     struct stat s = {0};
@@ -316,7 +318,7 @@ static mach_port_t libkern_allocate(vm_size_t size)
         goto out;
     }
 
-    IOKit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY | RTLD_LOCAL | RTLD_FIRST);
+    IOKit = dlopen(IOKIT_PATH, RTLD_LAZY | RTLD_LOCAL | RTLD_FIRST);
     if(IOKit == NULL)
     {
         DEBUG("Failed to load IOKit.");
@@ -330,6 +332,53 @@ static mach_port_t libkern_allocate(vm_size_t size)
     // We go through all this trouble rather than statically linking against MIG because
     // that becomes incompatible every now and then, while IOKit is always up to date.
 
+    char *IOServiceOpen = dlsym(IOKit, "IOServiceOpen"); // char for pointer arithmetic
+    if(IOServiceOpen == NULL)
+    {
+        DEBUG("Failed to find IOServiceOpen.");
+        goto out;
+    }
+
+    mach_hdr_t *IOKit_hdr = NULL;
+    uintptr_t addr_IOServiceOpen = 0,
+              addr_io_service_add_notification_ool = 0;
+    struct nlist_64 *symtab = NULL;
+    const char *strtab = NULL;
+    uintptr_t cache_base = 0;
+
+#ifdef TARGET_MACOS
+    Dl_info IOKit_info;
+    if(dladdr(IOServiceOpen, &IOKit_info) == 0)
+    {
+        DEBUG("Failed to find IOKit header.");
+        goto out;
+    }
+    IOKit_hdr = IOKit_info.dli_fbase;
+    if(syscall(294, &cache_base) != 0) // shared_region_check_np
+    {
+        DEBUG("Failed to find dyld_shared_cache: %s", strerror(errno));
+        goto out;
+    }
+    DEBUG("dyld_shared_cache is at " ADDR, cache_base);
+    dysc_hdr_t *cache_hdr = (dysc_hdr_t*)cache_base;
+    dysc_seg_t *cache_segs = (dysc_seg_t*)(cache_base + cache_hdr->segoff);
+    dysc_seg_t *cache_base_seg = NULL;
+    for(size_t i = 0; i < cache_hdr->nsegs; ++i)
+    {
+        if(cache_segs[i].fileoff == 0 && cache_segs[i].size > 0)
+        {
+            cache_base_seg = &cache_segs[i];
+            break;
+        }
+    }
+    if(cache_base_seg == NULL)
+    {
+        DEBUG("No segment maps to cache base");
+        goto out;
+    }
+#else
+    // TODO: This will have to be reworked once there are more 64-bit sub-archs than just arm64.
+    //       It's probably gonna be easiest to use PROC_PIDREGIONPATHINFO, at least that gives the full path on iOS.
     fd = open("/System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64", O_RDONLY);
     if(fd == -1)
     {
@@ -347,30 +396,27 @@ static mach_port_t libkern_allocate(vm_size_t size)
         DEBUG("Failed to map dyld_shared_cache_arm64 to memory: %s", strerror(errno));
         goto out;
     }
-    uintptr_t cache_base = (uintptr_t)cache;
+    cache_base = (uintptr_t)cache;
+    DEBUG("dyld_shared_cache is at " ADDR, cache_base);
 
-    char *IOServiceOpen = dlsym(IOKit, "IOServiceOpen"); // char for pointer arithmetic
-    if(IOServiceOpen == NULL)
+    dysc_hdr_t *cache_hdr = cache;
+    if(cache_hdr->nlocals == 0)
     {
-        DEBUG("Failed to find IOServiceOpen.");
+        DEBUG("Cache contains no local symbols.");
         goto out;
     }
-    dysc_hdr_t *cache_hdr = cache;
     dysc_local_info_t *local_info = (dysc_local_info_t*)(cache_base + cache_hdr->localoff);
     dysc_local_entry_t *local_entries = (dysc_local_entry_t*)((uintptr_t)local_info + local_info->entriesOffset);
     DEBUG("cache_hdr: " ADDR ", local_info: " ADDR ", local_entries: " ADDR, (uintptr_t)cache_hdr, (uintptr_t)local_info, (uintptr_t)local_entries);
     dysc_local_entry_t *local_entry = NULL;
-    mach_hdr_t *IOKit_hdr = NULL;
-    struct nlist_64 *symtab       = NULL,
-                    *local_symtab = (struct nlist_64*)((uintptr_t)local_info + local_info->nlistOffset);
-    const char      *strtab       = NULL,
-                    *local_strtab = (const char*)((uintptr_t)local_info + local_info->stringsOffset);
+    struct nlist_64 *local_symtab = (struct nlist_64*)((uintptr_t)local_info + local_info->nlistOffset);
+    const char *local_strtab = (const char*)((uintptr_t)local_info + local_info->stringsOffset);
     for(size_t i = 0; i < local_info->entriesCount; ++i)
     {
         mach_hdr_t *dylib_hdr = (mach_hdr_t*)(cache_base + local_entries[i].dylibOffset);
         CMD_ITERATE(dylib_hdr, cmd)
         {
-            if(cmd->cmd == LC_ID_DYLIB && strcmp((char*)cmd + ((struct dylib_command*)cmd)->dylib.name.offset, "/System/Library/Frameworks/IOKit.framework/Versions/A/IOKit") == 0)
+            if(cmd->cmd == LC_ID_DYLIB && strcmp((char*)cmd + ((struct dylib_command*)cmd)->dylib.name.offset, IOKIT_PATH) == 0)
             {
                 IOKit_hdr = dylib_hdr;
                 local_entry = &local_entries[i];
@@ -384,33 +430,6 @@ static mach_port_t libkern_allocate(vm_size_t size)
 
     found:;
     DEBUG("IOKit header: " ADDR ", local_symtab: " ADDR ", local_strtab: " ADDR, (uintptr_t)IOKit_hdr, (uintptr_t)local_symtab, (uintptr_t)local_strtab);
-    struct symtab_command *symcmd = NULL;
-    CMD_ITERATE(IOKit_hdr, cmd)
-    {
-        if(cmd->cmd == LC_SYMTAB)
-        {
-            symcmd = (struct symtab_command*)cmd;
-            symtab = (struct nlist_64*)(cache_base + symcmd->symoff);
-            strtab = (const char*)(cache_base + symcmd->stroff);
-            break;
-        }
-    }
-    if(symcmd == NULL)
-    {
-        DEBUG("Failed to find IOKit symtab.");
-        goto out;
-    }
-    uintptr_t addr_IOServiceOpen = 0,
-              addr_io_service_add_notification_ool = 0;
-    for(size_t i = 0; i < symcmd->nsyms; ++i)
-    {
-        const char *name = &strtab[symtab[i].n_un.n_strx];
-        if(strcmp(name, "_IOServiceOpen") == 0)
-        {
-            addr_IOServiceOpen = symtab[i].n_value;
-            break;
-        }
-    }
     for(size_t i = 0; i < local_entry->nlistCount; ++i)
     {
         const char *name = &local_strtab[local_symtab[i].n_un.n_strx];
@@ -419,6 +438,52 @@ static mach_port_t libkern_allocate(vm_size_t size)
             addr_io_service_add_notification_ool = local_symtab[i].n_value;
             break;
         }
+    }
+#endif
+    struct symtab_command *symcmd = NULL;
+    CMD_ITERATE(IOKit_hdr, cmd)
+    {
+        if(cmd->cmd == LC_SYMTAB)
+        {
+            symcmd = (struct symtab_command*)cmd;
+#ifdef TARGET_MACOS
+            for(size_t i = 0; i < cache_hdr->nsegs; ++i)
+            {
+                if(cache_segs[i].fileoff <= symcmd->symoff && cache_segs[i].fileoff + cache_segs[i].size > symcmd->symoff)
+                {
+                    symtab = (struct nlist_64*)(cache_base - cache_base_seg->addr + cache_segs[i].addr + symcmd->symoff - cache_segs[i].fileoff);
+                }
+                if(cache_segs[i].fileoff <= symcmd->stroff && cache_segs[i].fileoff + cache_segs[i].size > symcmd->stroff)
+                {
+                    strtab = (const char*)(cache_base - cache_base_seg->addr + cache_segs[i].addr + symcmd->stroff - cache_segs[i].fileoff);
+                }
+            }
+#else
+            symtab = (struct nlist_64*)(cache_base + symcmd->symoff);
+            strtab = (const char*)(cache_base + symcmd->stroff);
+#endif
+            break;
+        }
+    }
+    DEBUG("symcmd: " ADDR ", symtab: " ADDR ", strtab: " ADDR, (uintptr_t)symcmd, (uintptr_t)symtab, (uintptr_t)strtab);
+    if(symcmd == NULL || symtab == NULL || strtab == NULL)
+    {
+        DEBUG("Failed to find IOKit symtab.");
+        goto out;
+    }
+    for(size_t i = 0; i < symcmd->nsyms; ++i)
+    {
+        const char *name = &strtab[symtab[i].n_un.n_strx];
+        if(strcmp(name, "_IOServiceOpen") == 0)
+        {
+            addr_IOServiceOpen = symtab[i].n_value;
+        }
+#ifdef TARGET_MACOS
+        else if(strcmp(name, "_io_service_add_notification_ool") == 0)
+        {
+            addr_io_service_add_notification_ool = symtab[i].n_value;
+        }
+#endif
     }
     DEBUG("IOServiceOpen: " ADDR, addr_IOServiceOpen);
     DEBUG("io_service_add_notification_ool: " ADDR, addr_io_service_add_notification_ool);
@@ -463,7 +528,7 @@ static mach_port_t libkern_allocate(vm_size_t size)
     {
         dlclose(IOKit);
     }
-#ifdef __LP64__
+#if defined(__LP64__) && !defined(TARGET_MACOS)
     if(cache != NULL)
     {
         munmap(cache, s.st_size);
