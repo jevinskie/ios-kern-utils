@@ -188,7 +188,7 @@ do \
         return -1; \
     } \
 } while(0)
-#define parse(digit) ((digit) - (((digit) >= '0' && (digit) <= '9') ? '0' : (((digit) >= 'a' && (digit) <= 'f') ? 'a' : 'A')))
+#define parse(digit) ((digit) - (((digit) >= '0' && (digit) <= '9') ? '0' : ((((digit) >= 'a' && (digit) <= 'f') ? 'a' : 'A') - 10)))
             check(c);
             check(d);
             ((uint8_t*)patch)[i] = (parse(c) << 4) | parse(d);
