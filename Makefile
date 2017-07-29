@@ -1,5 +1,5 @@
 VERSION = 1.4.0
-BUILDDIR = build
+BINDIR = bin
 OBJDIR = obj
 SRCDIR = src
 ALL = $(patsubst $(SRCDIR)/tools/%.c,%,$(wildcard $(SRCDIR)/tools/*.c))
@@ -74,17 +74,17 @@ endif
 
 .PHONY: all lib dist xz deb clean
 
-all: $(addprefix $(BUILDDIR)/, $(ALL))
+all: $(addprefix $(BINDIR)/, $(ALL))
 
-$(BUILDDIR)/%: lib$(LIB).a $(SRCDIR)/tools/%.c | $(BUILDDIR)
+$(BINDIR)/%: lib$(LIB).a $(SRCDIR)/tools/%.c | $(BINDIR)
 	$(IGCC) -o $@ $(IGCC_FLAGS) $(IGCC_ARCH) $(LD_FLAGS) $(LD_LIBS) $(SRCDIR)/tools/$(@F).c
 ifdef STRIP
 	$(STRIP) $@
 endif
 	$(SIGN) $(SIGN_FLAGS) $@
 
-$(BUILDDIR):
-	mkdir -p $(BUILDDIR)
+$(BINDIR):
+	mkdir -p $(BINDIR)
 
 lib: lib$(LIB).a
 
@@ -103,8 +103,8 @@ xz: $(XZ)
 
 deb: $(DEB)
 
-$(XZ): $(addprefix $(BUILDDIR)/, $(ALL))
-	tar -cJf $(XZ) -C $(BUILDDIR) $(ALL)
+$(XZ): $(addprefix $(BINDIR)/, $(ALL))
+	tar -cJf $(XZ) -C $(BINDIR) $(ALL)
 
 $(DEB): $(PKG)/control.tar.gz $(PKG)/data.tar.lzma $(PKG)/debian-binary
 	( cd "$(PKG)"; ar -cr "../$(DEB)" 'debian-binary' 'control.tar.gz' 'data.tar.lzma'; )
@@ -112,10 +112,10 @@ $(DEB): $(PKG)/control.tar.gz $(PKG)/data.tar.lzma $(PKG)/debian-binary
 $(PKG)/control.tar.gz: $(PKG)/control
 	tar -czf '$(PKG)/control.tar.gz' --exclude '.DS_Store' --exclude '._*' --exclude 'control.tar.gz' --include '$(PKG)' --include '$(PKG)/control' -s '%^$(PKG)%.%' $(PKG)
 
-$(PKG)/data.tar.lzma: $(addprefix $(BUILDDIR)/, $(ALL)) | $(PKG) #misc/template.tar
-	tar -c --lzma -f '$(PKG)/data.tar.lzma' --exclude '.DS_Store' --exclude '._*' -s '%^build%./usr/bin%' @misc/template.tar $(BUILDDIR)
+$(PKG)/data.tar.lzma: $(addprefix $(BINDIR)/, $(ALL)) | $(PKG) #misc/template.tar
+	tar -c --lzma -f '$(PKG)/data.tar.lzma' --exclude '.DS_Store' --exclude '._*' -s '%^build%./usr/bin%' @misc/template.tar $(BINDIR)
 
-$(PKG)/debian-binary: $(addprefix $(BUILDDIR)/, $(ALL)) | $(PKG)
+$(PKG)/debian-binary: $(addprefix $(BINDIR)/, $(ALL)) | $(PKG)
 	echo '2.0' > "$(PKG)/debian-binary"
 
 $(PKG)/control: misc/control | $(PKG)
@@ -125,4 +125,4 @@ $(PKG):
 	mkdir -p $(PKG)
 
 clean:
-	rm -rf $(BUILDDIR) $(OBJDIR) lib$(LIB).a $(PKG) $(XZ) $(DEB)
+	rm -rf $(BINDIR) $(OBJDIR) lib$(LIB).a $(PKG) $(XZ) net.siguza.ios-kern-utils_*_iphoneos-arm.deb
