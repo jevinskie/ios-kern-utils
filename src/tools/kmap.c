@@ -61,6 +61,76 @@ static void print_usage(const char *self)
                     , self);
 }
 
+static void print_range(task_t kernel_task, bool extended, unsigned int level, vm_address_t min, vm_address_t max)
+{
+    vm_region_submap_info_data_64_t info;
+    vm_size_t size;
+    mach_msg_type_number_t info_count = VM_REGION_SUBMAP_INFO_COUNT_64;
+    unsigned int depth;
+    size_t displaysize;
+    char scale;
+    char curA, curR, curW, curX, maxA, maxR, maxW, maxX;
+
+    for(vm_address_t addr = min; 1; addr += size)
+    {
+        // get next memory region
+        depth = level;
+        if(vm_region_recurse_64(kernel_task, &addr, &size, &depth, (vm_region_info_t)&info, &info_count) != KERN_SUCCESS || addr >= max)
+        {
+            break;
+        }
+
+        // size
+        scale = 'K';
+        displaysize = size / 1024;
+        if(displaysize > 99999)
+        {
+            scale = 'M';
+            displaysize /= 1024;
+            if(displaysize > 99999)
+            {
+                scale = 'G';
+                displaysize /= 1024;
+            }
+        }
+
+        // protection
+        curA = (info.protection) & ~(VM_PROT_ALL) ? '+' : '-';
+        curR = (info.protection) & VM_PROT_READ ? 'r' : '-';
+        curW = (info.protection) & VM_PROT_WRITE ? 'w' : '-';
+        curX = (info.protection) & VM_PROT_EXECUTE ? 'x' : '-';
+        maxA = (info.max_protection) & ~(VM_PROT_ALL) ? '+' : '-';
+        maxR = (info.max_protection) & VM_PROT_READ ? 'r' : '-';
+        maxW = (info.max_protection) & VM_PROT_WRITE ? 'w' : '-';
+        maxX = (info.max_protection) & VM_PROT_EXECUTE ? 'x' : '-';
+
+        if(extended)
+        {
+            printf("%*s" ADDR "-" ADDR "%*s" " [%5zu%c] %c%c%c%c/%c%c%c%c [%s %s %s] %016llx [%u %u %hu %hhu %hu] %08x/%08x:<%10u> %u,%u {%u,%u}\n"
+                   , 4 * level, "", addr, addr+size, 4 * (1 - level), ""
+                   , displaysize, scale
+                   , curA, curR, curW, curX
+                   , maxA, maxR, maxW, maxX
+                   , info.is_submap ? "map" : depth > 0 ? "sub" : "mem", share_mode(info.share_mode), inheritance(info.inheritance), info.offset
+                   , info.behavior, info.pages_reusable, info.user_wired_count, info.external_pager, info.shadow_depth // these should all be 0
+                   , info.user_tag, info.object_id, info.ref_count
+                   , info.pages_swapped_out, info.pages_shared_now_private, info.pages_resident, info.pages_dirtied
+            );
+        }
+        else
+        {
+            printf(ADDR "-" ADDR " [%5zu%c] %c%c%c/%c%c%c\n"
+                   , addr, addr + size, displaysize, scale
+                   , curR, curW, curX, maxR, maxW, maxX);
+        }
+
+        if(info.is_submap)
+        {
+            print_range(kernel_task, extended, level + 1, addr, addr + size);
+        }
+    }
+}
+
 int main(int argc, const char **argv)
 {
     bool extended = false;
@@ -95,66 +165,7 @@ int main(int argc, const char **argv)
     task_t kernel_task;
     KERNEL_TASK_OR_GTFO(kernel_task);
 
-    vm_region_submap_info_data_64_t info;
-    vm_size_t size;
-    mach_msg_type_number_t info_count = VM_REGION_SUBMAP_INFO_COUNT_64;
-    unsigned int depth;
-    size_t displaysize;
-    char scale;
-    char curA, curR, curW, curX, maxA, maxR, maxW, maxX;
-
-    for(vm_address_t addr = 0; 1; addr += size)
-    {
-        // get next memory region
-        depth = UINT_MAX;
-        if(vm_region_recurse_64(kernel_task, &addr, &size, &depth, (vm_region_info_t)&info, &info_count) != KERN_SUCCESS)
-        {
-            break;
-        }
-
-        // size
-        scale = 'K';
-        displaysize = size / 1024;
-        if(displaysize > 99999)
-        {
-            scale = 'M';
-            displaysize /= 1024;
-            if(displaysize > 99999)
-            {
-                scale = 'G';
-                displaysize /= 1024;
-            }
-        }
-
-        // protection
-        curA = (info.protection) & ~(VM_PROT_ALL) ? '+' : '-';
-        curR = (info.protection) & VM_PROT_READ ? 'r' : '-';
-        curW = (info.protection) & VM_PROT_WRITE ? 'w' : '-';
-        curX = (info.protection) & VM_PROT_EXECUTE ? 'x' : '-';
-        maxA = (info.max_protection) & ~(VM_PROT_ALL) ? '+' : '-';
-        maxR = (info.max_protection) & VM_PROT_READ ? 'r' : '-';
-        maxW = (info.max_protection) & VM_PROT_WRITE ? 'w' : '-';
-        maxX = (info.max_protection) & VM_PROT_EXECUTE ? 'x' : '-';
-
-        if(extended)
-        {
-            printf(ADDR "-" ADDR " [%5zu%c] %c%c%c%c/%c%c%c%c [%s %s %s] %016llx [%u %u %hu %hhu %hu] %08x/%08x:<%10u> %u,%u {%u,%u}\n"
-                   , addr, addr+size, displaysize, scale
-                   , curA, curR, curW, curX
-                   , maxA, maxR, maxW, maxX
-                   , info.is_submap ? "map" : depth > 0 ? "sub" : "mem", share_mode(info.share_mode), inheritance(info.inheritance), info.offset
-                   , info.behavior, info.pages_reusable, info.user_wired_count, info.external_pager, info.shadow_depth // these should all be 0
-                   , info.user_tag, info.object_id, info.ref_count
-                   , info.pages_swapped_out, info.pages_shared_now_private, info.pages_resident, info.pages_dirtied
-            );
-        }
-        else
-        {
-            printf(ADDR "-" ADDR " [%5zu%c] %c%c%c/%c%c%c\n"
-                   , addr, addr+size, displaysize, scale
-                   , curR, curW, curX, maxR, maxW, maxX);
-        }
-    }
+    print_range(kernel_task, extended, 0, 0, ~0);
 
     return 0;
 }
