@@ -56,6 +56,31 @@ do \
     } \
 } while(0)
 
+#define VERIFY_TASK(task, ret) \
+do \
+{ \
+    if(ret == KERN_SUCCESS) \
+    { \
+        DEBUG("Checking if port is restricted..."); \
+        mach_port_array_t __arr; \
+        mach_msg_type_number_t __num; \
+        ret = mach_ports_lookup(task, &__arr, &__num); \
+        if(ret == KERN_SUCCESS) \
+        { \
+            task_t __self = mach_task_self(); \
+            for(size_t __i = 0; __i < __num; ++__i) \
+            { \
+                mach_port_deallocate(__self, __arr[__i]); \
+            } \
+        } \
+        else \
+        { \
+            DEBUG("Failure: task port 0x%08x is restricted.", task); \
+            ret = KERN_NO_ACCESS; \
+        } \
+    } \
+} while(0)
+
 kern_return_t get_kernel_task(task_t *task)
 {
     static task_t kernel_task = MACH_PORT_NULL;
@@ -65,70 +90,75 @@ kern_return_t get_kernel_task(task_t *task)
         DEBUG("Getting kernel task...");
         kern_return_t ret;
         kernel_task = MACH_PORT_NULL;
-#ifdef TARGET_MACOS
-        // Huge props to Jonathan Levin for this method!
-        // Who needs task_for_pid anyway? :P
-        DEBUG("Trying processor_set_tasks()...");
         host_t host = mach_host_self();
-        mach_port_t name = MACH_PORT_NULL,
-                    priv = MACH_PORT_NULL;
-        DEBUG("Getting default processor set name port...");
-        ret = processor_set_default(host, &name);
-        VERIFY_PORT(name, ret);
-        if(ret == KERN_SUCCESS)
+
+        // Try common workaround first
+        DEBUG("Trying host_get_special_port(4)...");
+        ret = host_get_special_port(host, HOST_LOCAL_NODE, 4, &kernel_task);
+        VERIFY_PORT(kernel_task, ret);
+        VERIFY_TASK(kernel_task, ret);
+
+        if(ret != KERN_SUCCESS)
         {
-            DEBUG("Getting default processor set priv port...");
-            ret = host_processor_set_priv(host, name, &priv);
-            VERIFY_PORT(priv, ret);
+            kernel_task = MACH_PORT_NULL;
+#ifdef TARGET_MACOS
+            // Huge props to Jonathan Levin for this method!
+            // Who needs task_for_pid anyway? :P
+            DEBUG("Trying processor_set_tasks()...");
+            mach_port_t name = MACH_PORT_NULL,
+                        priv = MACH_PORT_NULL;
+            DEBUG("Getting default processor set name port...");
+            ret = processor_set_default(host, &name);
+            VERIFY_PORT(name, ret);
             if(ret == KERN_SUCCESS)
             {
-                DEBUG("Getting processor tasks...");
-                task_array_t tasks;
-                mach_msg_type_number_t num;
-                ret = processor_set_tasks(priv, &tasks, &num);
-                if(ret != KERN_SUCCESS)
+                DEBUG("Getting default processor set priv port...");
+                ret = host_processor_set_priv(host, name, &priv);
+                VERIFY_PORT(priv, ret);
+                if(ret == KERN_SUCCESS)
                 {
-                    DEBUG("Failed: %s", mach_error_string(ret));
-                }
-                else
-                {
-                    DEBUG("Got %u tasks, looking for kernel task...", num);
-                    for(size_t i = 0; i < num; ++i)
+                    DEBUG("Getting processor tasks...");
+                    task_array_t tasks;
+                    mach_msg_type_number_t num;
+                    ret = processor_set_tasks(priv, &tasks, &num);
+                    if(ret != KERN_SUCCESS)
                     {
-                        int pid = 0;
-                        ret = pid_for_task(tasks[i], &pid);
-                        if(ret != KERN_SUCCESS)
-                        {
-                            DEBUG("Failed to get pid for task %lu (%08x): %s", i, tasks[i], mach_error_string(ret));
-                            break;
-                        }
-                        else if(pid == 0)
-                        {
-                            kernel_task = tasks[i];
-                            break;
-                        }
+                        DEBUG("Failed: %s", mach_error_string(ret));
                     }
-                    if(kernel_task == MACH_PORT_NULL)
+                    else
                     {
-                        DEBUG("Kernel task is not in set.");
-                        ret = KERN_FAILURE;
+                        DEBUG("Got %u tasks, looking for kernel task...", num);
+                        for(size_t i = 0; i < num; ++i)
+                        {
+                            int pid = 0;
+                            ret = pid_for_task(tasks[i], &pid);
+                            if(ret != KERN_SUCCESS)
+                            {
+                                DEBUG("Failed to get pid for task %lu (%08x): %s", i, tasks[i], mach_error_string(ret));
+                                break;
+                            }
+                            else if(pid == 0)
+                            {
+                                kernel_task = tasks[i];
+                                break;
+                            }
+                        }
+                        if(kernel_task == MACH_PORT_NULL)
+                        {
+                            DEBUG("Kernel task is not in set.");
+                            ret = KERN_FAILURE;
+                        }
                     }
                 }
             }
-        }
 #else
-        DEBUG("Trying task_for_pid(0)...");
-        ret = task_for_pid(mach_task_self(), 0, &kernel_task);
-        VERIFY_PORT(kernel_task, ret);
-#endif
-        if(ret != KERN_SUCCESS)
-        {
-            // Try Pangu's special port
-            DEBUG("Trying host_get_special_port(4)...");
-            kernel_task = MACH_PORT_NULL;
-            ret = host_get_special_port(mach_host_self(), HOST_LOCAL_NODE, 4, &kernel_task);
+            DEBUG("Trying task_for_pid(0)...");
+            ret = task_for_pid(mach_task_self(), 0, &kernel_task);
             VERIFY_PORT(kernel_task, ret);
+#endif
         }
+        VERIFY_TASK(kernel_task, ret);
+
         if(ret != KERN_SUCCESS)
         {
             DEBUG("Returning failure.");
