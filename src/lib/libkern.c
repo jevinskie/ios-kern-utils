@@ -104,6 +104,7 @@ kern_return_t get_kernel_task(task_t *task)
 #ifdef TARGET_MACOS
             // Huge props to Jonathan Levin for this method!
             // Who needs task_for_pid anyway? :P
+            // ...or "needed", as of mid-Sierra. :/
             DEBUG("Trying processor_set_tasks()...");
             mach_port_t name = MACH_PORT_NULL,
                         priv = MACH_PORT_NULL;
