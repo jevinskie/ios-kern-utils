@@ -1,4 +1,4 @@
-VERSION = 1.4.0
+VERSION = 1.4.1
 PKGNAME = net.siguza.ios-kern-utils
 BINDIR = bin
 OBJDIR = obj
