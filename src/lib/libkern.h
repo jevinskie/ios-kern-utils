@@ -55,6 +55,8 @@ vm_size_t kernel_read(vm_address_t addr, vm_size_t size, void *buf);
  */
 vm_size_t kernel_write(vm_address_t addr, vm_size_t size, void *buf);
 
+kern_return_t kernel_set_prot(vm_address_t addr, vm_size_t size, boolean_t set_maximum, vm_prot_t new_protection);
+
 /*
  * Find the given byte sequence in the kernel address space between start and end.
  *

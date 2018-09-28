@@ -1003,6 +1003,27 @@ vm_size_t kernel_write(vm_address_t addr, vm_size_t size, void *buf)
     return bytes_written;
 }
 
+kern_return_t kernel_set_prot(vm_address_t addr, vm_size_t size, boolean_t set_maximum, vm_prot_t new_protection)
+{
+    DEBUG("Changing %s perms to kernel at " ADDR "-" ADDR " to 0x%08x", set_maximum ? "max" : "current", addr, addr + size, new_protection);
+    kern_return_t ret;
+    task_t kernel_task;
+
+    ret = get_kernel_task(&kernel_task);
+    if(ret != KERN_SUCCESS)
+    {
+        return -1;
+    }
+
+    ret = vm_protect(kernel_task, addr, size, set_maximum, new_protection);
+    if(ret != KERN_SUCCESS)
+    {
+        DEBUG("vm_write error: %s", mach_error_string(ret));
+    }
+
+    return ret;
+}
+
 vm_address_t kernel_find(vm_address_t addr, vm_size_t len, void *buf, size_t size)
 {
     vm_address_t ret = 0;
