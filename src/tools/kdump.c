@@ -23,17 +23,18 @@
 
 static void print_usage(const char *self)
 {
-    fprintf(stderr, "Usage: %s [-h] [-v [-d]] [kernel.bin]\n"
+    fprintf(stderr, "Usage: %s [-h] [-v [-d] [-b 0xKBASE]] [kernel.bin]\n"
                     "    -d  Debug mode (sleep between function calls, gives\n"
                     "        sshd time to deliver output before kernel panic)\n"
                     "    -h  Print this help\n"
                     "    -v  Verbose (debug output)\n"
+                    "    -b  Supply kbase already found using kinfo since it can be slow to find on macOS\n"
                     , self);
 }
 
 int main(int argc, const char **argv)
 {
-    vm_address_t kbase;
+    vm_address_t kbase = 0;
     FILE* f;
     size_t filesize = 0;
     unsigned char *binary;
@@ -63,6 +64,11 @@ int main(int argc, const char **argv)
         {
             verbose = true;
         }
+        else if(strcmp(argv[aoff], "-b") == 0)
+        {
+            kbase = strtoull(argv[aoff+1], NULL, 16);
+            ++aoff;
+        }
         else
         {
             fprintf(stderr, "[!] Unrecognized option: %s\n\n", argv[aoff]);
@@ -81,7 +87,9 @@ int main(int argc, const char **argv)
         outfile = argv[aoff];
     }
 
-    KERNEL_BASE_OR_GTFO(kbase);
+    if (!kbase) {
+        KERNEL_BASE_OR_GTFO(kbase);
+    }
     fprintf(stderr, "[*] Found kernel base at address 0x" ADDR "\n", kbase);
 
     if(kernel_read(kbase, sizeof(hdr_buf), &hdr_buf) != sizeof(hdr_buf))
@@ -121,6 +129,8 @@ int main(int argc, const char **argv)
      * executable.
      */
 
+    uintptr_t base_fileoff = 0;
+    uintptr_t total_vmsize = 0;
     // loop through all segments once to determine file size
     CMD_ITERATE(orig_hdr, cmd)
     {
@@ -128,10 +138,18 @@ int main(int argc, const char **argv)
         {
             case MACH_LC_SEGMENT:
                 seg = (mach_seg_t*)cmd;
-                filesize = max(filesize, seg->fileoff + seg->filesize);
+                if (!strcmp(seg->segname, "__LINKEDIT")) {
+                    break;
+                }
+                if (!base_fileoff) {
+                    base_fileoff = seg->fileoff;
+                }
+                total_vmsize += seg->vmsize;
                 break;
         }
     }
+    filesize = sizeof(*orig_hdr) + orig_hdr->sizeofcmds + total_vmsize;
+    fprintf(stderr, "[*] Output binary size: %p, first segment offset: %p\n", (void *)filesize, (void *)base_fileoff);
     binary = malloc(filesize);
     if(binary == NULL)
     {
@@ -139,6 +157,8 @@ int main(int argc, const char **argv)
         return -1;
     }
     memset(binary, 0, filesize);
+
+    uintptr_t total_written_vmsize = 0;
 
     // loop again to restore everything
     fprintf(stderr, "[*] Restoring segments...\n");
@@ -149,15 +169,37 @@ int main(int argc, const char **argv)
             case MACH_LC_SEGMENT:
                 seg = (mach_seg_t*)cmd;
                 fprintf(stderr, "[+] Found segment %s\n", seg->segname);
-                if(kernel_read(seg->vmaddr, seg->filesize, binary + seg->fileoff) != seg->filesize)
+                if (!strcmp(seg->segname, "__LINKEDIT")) {
+                    fprintf(stderr, "[+] Skipping __LINKEDIT\n");
+                    break;
+                }
+                fprintf(stderr, "     Would read %p from %p\n", (void *)seg->vmsize, (void*)seg->vmaddr);
+                mach_seg_t *new_seg = memcpy((char*)(hdr + 1) + hdr->sizeofcmds, seg, seg->cmdsize);
+                new_seg->fileoff = base_fileoff + total_written_vmsize;
+                new_seg->filesize = seg->vmsize;
+                if(kernel_read(seg->vmaddr, seg->vmsize, binary + new_seg->fileoff) != seg->vmsize)
                 {
                     fprintf(stderr, "[!] Kernel I/O error\n");
                     return -1;
                 }
+                mach_sec_t *new_sec = (mach_sec_t *)((char *)new_seg + sizeof(mach_seg_t));
+                SEC_ITERATE(seg, sec)
+                {
+                    memcpy(new_sec, sec, sizeof(mach_sec_t));
+                    uintptr_t sec_offset_in_seg = sec->offset - seg->fileoff;
+                    new_sec->offset = new_seg->fileoff + sec_offset_in_seg;
+                    if ((new_sec->flags & SECTION_TYPE) == S_ZEROFILL) {
+                        new_sec->flags = (new_sec->flags & SECTION_ATTRIBUTES) | S_REGULAR;
+                    }
+                    new_sec++;
+                }
+                total_written_vmsize += seg->vmsize;
+                hdr->sizeofcmds += cmd->cmdsize;
+                hdr->ncmds++;
+                break;
             case LC_UUID:
             case LC_UNIXTHREAD:
             case LC_SOURCE_VERSION:
-            case LC_FUNCTION_STARTS:
             case LC_VERSION_MIN_MACOSX:
             case LC_VERSION_MIN_IPHONEOS:
             case LC_VERSION_MIN_TVOS:
@@ -170,7 +212,8 @@ int main(int argc, const char **argv)
     }
 
     // now replace the old header with the new one ...
-    memcpy(binary, hdr, sizeof(*hdr) + orig_hdr->sizeofcmds);
+    memset(binary, 0, base_fileoff);
+    memcpy(binary, hdr, sizeof(*hdr) + hdr->sizeofcmds);
 
     // ... and write the final binary to file
     f = fopen(outfile, "wb");

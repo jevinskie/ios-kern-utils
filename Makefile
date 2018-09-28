@@ -15,7 +15,7 @@ LD_FLAGS         = -L. -l$(LIB) -framework CoreFoundation -Wl,-dead_strip
 
 # Universal defaults
 LIBTOOL_FLAGS   ?= -static
-IOS_GCC_ARCH    ?= -arch armv7 -arch arm64 -miphoneos-version-min=6.0
+IOS_GCC_ARCH    ?= -arch arm64 -miphoneos-version-min=6.0
 MACOS_GCC_ARCH  ?= -arch x86_64 -mmacosx-version-min=10.10
 IOS_GCC_FLAGS   ?= $(GCC_FLAGS)
 MACOS_GCC_FLAGS ?= $(GCC_FLAGS)
