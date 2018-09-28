@@ -138,7 +138,9 @@ int main(int argc, const char **argv)
         {
             case MACH_LC_SEGMENT:
                 seg = (mach_seg_t*)cmd;
-                if (!strcmp(seg->segname, "__LINKEDIT")) {
+                if (!strcmp(seg->segname, "__LINKEDIT") ||
+                    !strcmp(seg->segname, "__KLD") ||
+                    !strcmp(seg->segname, "__PRELINK_INFO")) {
                     break;
                 }
                 total_vmsize += seg->vmsize;
@@ -166,14 +168,16 @@ int main(int argc, const char **argv)
             case MACH_LC_SEGMENT:
                 seg = (mach_seg_t*)cmd;
                 fprintf(stderr, "[+] Found segment %s\n", seg->segname);
-                if (!strcmp(seg->segname, "__LINKEDIT")) {
-                    fprintf(stderr, "[+] Skipping __LINKEDIT\n");
+                if (!strcmp(seg->segname, "__LINKEDIT") ||
+                    !strcmp(seg->segname, "__KLD") ||
+                    !strcmp(seg->segname, "__PRELINK_INFO")) {
+                    fprintf(stderr, "[*] Skipping %s\n", seg->segname);
                     break;
                 }
-                fprintf(stderr, "     Would read %p from %p\n", (void *)seg->vmsize, (void*)seg->vmaddr);
                 mach_seg_t *new_seg = memcpy((char*)(hdr + 1) + hdr->sizeofcmds, seg, seg->cmdsize);
                 new_seg->fileoff = base_fileoff + total_written_vmsize;
                 new_seg->filesize = seg->vmsize;
+                fprintf(stderr, "     Reading %p from %p to offset %p\n", (void *)seg->vmsize, (void*)seg->vmaddr, (void *)new_seg->fileoff);
                 if(kernel_read(seg->vmaddr, seg->vmsize, binary + new_seg->fileoff) != seg->vmsize)
                 {
                     fprintf(stderr, "[!] Kernel I/O error\n");
