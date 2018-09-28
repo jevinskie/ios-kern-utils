@@ -139,8 +139,7 @@ int main(int argc, const char **argv)
             case MACH_LC_SEGMENT:
                 seg = (mach_seg_t*)cmd;
                 if (!strcmp(seg->segname, "__LINKEDIT") ||
-                    !strcmp(seg->segname, "__KLD") ||
-                    !strcmp(seg->segname, "__PRELINK_INFO")) {
+                    !strcmp(seg->segname, "__KLD")) {
                     break;
                 }
                 total_vmsize += seg->vmsize;
@@ -169,19 +168,24 @@ int main(int argc, const char **argv)
                 seg = (mach_seg_t*)cmd;
                 fprintf(stderr, "[+] Found segment %s\n", seg->segname);
                 if (!strcmp(seg->segname, "__LINKEDIT") ||
-                    !strcmp(seg->segname, "__KLD") ||
-                    !strcmp(seg->segname, "__PRELINK_INFO")) {
+                    !strcmp(seg->segname, "__KLD")) {
                     fprintf(stderr, "[*] Skipping %s\n", seg->segname);
                     break;
                 }
                 mach_seg_t *new_seg = memcpy((char*)(hdr + 1) + hdr->sizeofcmds, seg, seg->cmdsize);
                 new_seg->fileoff = base_fileoff + total_written_vmsize;
                 new_seg->filesize = seg->vmsize;
-                fprintf(stderr, "     Reading %p from %p to offset %p\n", (void *)seg->vmsize, (void*)seg->vmaddr, (void *)new_seg->fileoff);
-                if(kernel_read(seg->vmaddr, seg->vmsize, binary + new_seg->fileoff) != seg->vmsize)
-                {
-                    fprintf(stderr, "[!] Kernel I/O error\n");
-                    return -1;
+                if (strcmp(seg->segname, "__PRELINK_INFO")) {
+                    fprintf(stderr, "\tReading %p from %p to offset %p\n", (void *)seg->vmsize, (void*)seg->vmaddr, (void *)new_seg->fileoff);
+                    if(kernel_read(seg->vmaddr, seg->vmsize, binary + new_seg->fileoff) != seg->vmsize)
+                    {
+                        fprintf(stderr, "[!] Kernel I/O error\n");
+                        return -1;
+                    }
+                } else {
+                    // skipping __PRELINK_INFO makes IDA unhappy so just leave it in but zero and IDA
+                    // will split the kernelcache via Mach-O magic searching
+                    fprintf(stderr, "\tZero filling __PRELINK_INFO since the kernel has already freed it.\n");
                 }
                 uintptr_t sec_written_size = 0;
                 mach_sec_t *new_sec = (mach_sec_t *)((char *)new_seg + sizeof(mach_seg_t));
