@@ -141,14 +141,11 @@ int main(int argc, const char **argv)
                 if (!strcmp(seg->segname, "__LINKEDIT")) {
                     break;
                 }
-                if (!base_fileoff) {
-                    base_fileoff = seg->fileoff;
-                }
                 total_vmsize += seg->vmsize;
                 break;
         }
     }
-    filesize = sizeof(*orig_hdr) + orig_hdr->sizeofcmds + total_vmsize;
+    filesize = total_vmsize;
     fprintf(stderr, "[*] Output binary size: %p, first segment offset: %p\n", (void *)filesize, (void *)base_fileoff);
     binary = malloc(filesize);
     if(binary == NULL)
@@ -182,16 +179,24 @@ int main(int argc, const char **argv)
                     fprintf(stderr, "[!] Kernel I/O error\n");
                     return -1;
                 }
+                uintptr_t sec_written_size = 0;
                 mach_sec_t *new_sec = (mach_sec_t *)((char *)new_seg + sizeof(mach_seg_t));
                 SEC_ITERATE(seg, sec)
                 {
                     memcpy(new_sec, sec, sizeof(mach_sec_t));
-                    uintptr_t sec_offset_in_seg = sec->offset - seg->fileoff;
+                    /*
+                    uintptr_t sec_offset_in_seg = sec_written_size;
+                    if (sec->offset) {
+                        sec_offset_in_seg = sec->offset - seg->fileoff;
+                    }
+                    */
+                    uintptr_t sec_offset_in_seg = sec->addr - seg->vmaddr;
                     new_sec->offset = new_seg->fileoff + sec_offset_in_seg;
                     if ((new_sec->flags & SECTION_TYPE) == S_ZEROFILL) {
                         new_sec->flags = (new_sec->flags & SECTION_ATTRIBUTES) | S_REGULAR;
                     }
                     new_sec++;
+                    sec_written_size += sec->size;
                 }
                 total_written_vmsize += seg->vmsize;
                 hdr->sizeofcmds += cmd->cmdsize;
