@@ -266,7 +266,7 @@ static void print_range(task_t kernel_task, bool extended, bool gaps, unsigned i
                    , addr, addr + size, displaysize, scale
                    , curR, curW, curX, maxR, maxW, maxX);
         }
-        if (size < 1024*1024*1 && info.protection && !is_in_regions(addr, kcache_regions, MAX_KCACHE_REGIONS)) {
+        if (size < 1024*1024*1 && info.protection & VM_PROT_READ && !(info.user_tag & VM_KERN_MEMORY_STACK) && !(info.share_mode != SM_SHARED_ALIASED) && !is_in_regions(addr, kcache_regions, MAX_KCACHE_REGIONS)) {
             non_kcache_regions[num_non_kcache_regions].addr = addr;
             non_kcache_regions[num_non_kcache_regions].size = size;
             non_kcache_regions[num_non_kcache_regions].tag = info.user_tag;
@@ -415,13 +415,14 @@ int main(int argc, const char **argv)
 
     task_t kernel_task;
     KERNEL_TASK_OR_GTFO(kernel_task);
-    print_range(kernel_task, 0, 0, 0, 0, ~0);
+    print_range(kernel_task, 0, 1, 1, 0, ~0);
     ncmds += num_non_kcache_regions;
     total_cmd_size += num_non_kcache_regions * (sizeof(mach_seg_t) + sizeof(mach_sec_t));
 
     // HEADER seg
     ncmds += 1;
-    total_cmd_size = sizeof(mach_seg_t) + sizeof(mach_sec_t);
+    // total_cmd_size = sizeof(mach_seg_t) + sizeof(mach_sec_t);
+    total_cmd_size += sizeof(mach_seg_t);
 
     size_t new_hdr_size = sizeof(*orig_hdr) + total_cmd_size;
     hdr = malloc(new_hdr_size);
@@ -432,6 +433,8 @@ int main(int argc, const char **argv)
     }
     memset(hdr, 0, new_hdr_size);
     memcpy(hdr, orig_hdr, sizeof(*orig_hdr));
+    hdr->ncmds = 0;
+    hdr->sizeofcmds = 0;
 
     filesize = sizeof(*orig_hdr) + total_cmd_size + total_vmsize + non_kcache_size;
     // filesize = new_hdr_size + total_vmsize;
@@ -444,24 +447,24 @@ int main(int argc, const char **argv)
     }
     memset(binary, 0, filesize);
 
-    memcpy(binary, orig_hdr, sizeof(*orig_hdr));
     mach_seg_t *hdr_seg = (mach_seg_t *)(hdr + 1);
     hdr_seg->cmd = MACH_LC_SEGMENT;
-    hdr_seg->cmdsize = sizeof(mach_seg_t) + sizeof(mach_sec_t);
+    // hdr_seg->cmdsize = sizeof(mach_seg_t) + sizeof(mach_sec_t);
+    hdr_seg->cmdsize = sizeof(mach_seg_t);
     hdr_seg->fileoff = 0;
     hdr_seg->filesize = sizeof(*orig_hdr) + total_cmd_size;
     hdr_seg->vmaddr = HEADER_VMADDR;
     hdr_seg->vmsize = hdr_seg->filesize;
     hdr_seg->maxprot = VM_PROT_READ;
     hdr_seg->initprot = VM_PROT_READ;
-    hdr_seg->nsects = 1;
+    hdr_seg->nsects = 0;
     strcpy(hdr_seg->segname, "__HEADER");
-    mach_sec_t *hdr_sec = (mach_sec_t *)(hdr_seg + 1);
-    strcpy(hdr_sec->sectname, "__header");
-    strcpy(hdr_sec->segname, "__HEADER");
-    hdr_sec->addr = HEADER_VMADDR;
-    hdr_sec->size = hdr_seg->filesize;
-    hdr_sec->offset = 0;
+    // mach_sec_t *hdr_sec = (mach_sec_t *)(hdr_seg + 1);
+    // strcpy(hdr_sec->sectname, "__header");
+    // strcpy(hdr_sec->segname, "__HEADER");
+    // hdr_sec->addr = HEADER_VMADDR;
+    // hdr_sec->size = hdr_seg->filesize;
+    // hdr_sec->offset = 0;
     hdr->sizeofcmds += hdr_seg->cmdsize;
     hdr->ncmds++;
 
@@ -529,7 +532,7 @@ int main(int argc, const char **argv)
 
     for (int i = 0; i < num_non_kcache_regions; ++i) {
         kregion_t reg = non_kcache_regions[i];
-        mach_seg_t *seg = (mach_seg_t *)(binary + hdr->sizeofcmds);
+        mach_seg_t *seg = (mach_seg_t *)((char *)(hdr + 1) + hdr->sizeofcmds);
         seg->cmd = MACH_LC_SEGMENT;
         seg->cmdsize = sizeof(mach_seg_t) + sizeof(mach_sec_t);
         seg->fileoff = total_written_vmsize;
@@ -546,6 +549,11 @@ int main(int argc, const char **argv)
         sec->addr = reg.addr;
         sec->size = reg.size;
         sec->offset = total_written_vmsize;
+        if(kernel_read(reg.addr, reg.size, binary + seg->fileoff) != reg.size)
+        {
+            fprintf(stderr, "[!] Kernel I/O error\n");
+            return -1;
+        }
         hdr->sizeofcmds += seg->cmdsize;
         hdr->ncmds++;
         total_written_vmsize += seg->vmsize;
