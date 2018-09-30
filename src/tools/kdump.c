@@ -266,7 +266,7 @@ static void print_range(task_t kernel_task, bool extended, bool gaps, unsigned i
                    , addr, addr + size, displaysize, scale
                    , curR, curW, curX, maxR, maxW, maxX);
         }
-        if (size < 1024*1024*1 && info.protection & VM_PROT_READ && !(info.user_tag & VM_KERN_MEMORY_STACK) && !(info.share_mode != SM_SHARED_ALIASED) && !is_in_regions(addr, kcache_regions, MAX_KCACHE_REGIONS)) {
+        if (size < 1024*1024*128 && info.protection & VM_PROT_READ && info.user_tag != VM_KERN_MEMORY_STACK && info.share_mode != SM_EMPTY && info.user_tag != VM_KERN_MEMORY_COMPRESSOR && info.user_tag != VM_KERN_MEMORY_COMPRESSED_DATA && !info.is_submap && !is_in_regions(addr, kcache_regions, MAX_KCACHE_REGIONS)) {
             non_kcache_regions[num_non_kcache_regions].addr = addr;
             non_kcache_regions[num_non_kcache_regions].size = size;
             non_kcache_regions[num_non_kcache_regions].tag = info.user_tag;

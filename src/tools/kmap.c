@@ -71,19 +71,19 @@ static const char* kern_tag(uint32_t tag)
         case VM_KERN_MEMORY_ZONE:               return "Zalloc";
         case VM_KERN_MEMORY_KALLOC:             return "Kalloc";
         case VM_KERN_MEMORY_COMPRESSOR:         return "VM compressor";
-        case VM_KERN_MEMORY_COMPRESSED_DATA:    return "TODO";
+        case VM_KERN_MEMORY_COMPRESSED_DATA:    return "COMPDATA";
         case VM_KERN_MEMORY_PHANTOM_CACHE:      return "Phantom (thrashing)";
-        case VM_KERN_MEMORY_WAITQ:              return "TODO";
+        case VM_KERN_MEMORY_WAITQ:              return "WAITQ";
         case VM_KERN_MEMORY_DIAG:               return "Diagnostics";
-        case VM_KERN_MEMORY_LOG:                return "TODO";
+        case VM_KERN_MEMORY_LOG:                return "LOG";
         case VM_KERN_MEMORY_FILE:               return "File handling";
-        case VM_KERN_MEMORY_MBUF:               return "TODO";
-        case VM_KERN_MEMORY_UBC:                return "TODO";
+        case VM_KERN_MEMORY_MBUF:               return "MBUF";
+        case VM_KERN_MEMORY_UBC:                return "UBC";
         case VM_KERN_MEMORY_SECURITY:           return "Security/MACF";
-        case VM_KERN_MEMORY_MLOCK:              return "TODO";
-        case VM_KERN_MEMORY_REASON:             return "TODO";
+        case VM_KERN_MEMORY_MLOCK:              return "MLOCK";
+        case VM_KERN_MEMORY_REASON:             return "REASON";
         case VM_KERN_MEMORY_SKYWALK:            return "Skywalk";
-        case VM_KERN_MEMORY_LTABLE:             return "TODO";
+        case VM_KERN_MEMORY_LTABLE:             return "LTABLE";
     }
 
     return tag >= VM_KERN_MEMORY_FIRST_DYNAMIC ? "(dynamic)" : "???";
